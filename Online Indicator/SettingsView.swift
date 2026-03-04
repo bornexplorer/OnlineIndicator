@@ -14,7 +14,6 @@ struct SettingsView: View {
     @State private var pingURLSaved     = false
     @State private var isLaunchEnabled  = false
 
-    // MARK: Update state
     enum UpdateStatus: Equatable {
         case idle, checking
         case available(tag: String)
@@ -23,7 +22,6 @@ struct SettingsView: View {
     }
     @State private var updateStatus: UpdateStatus = .idle
 
-    // MARK: Appearance state — one Slot per connection status
     @State private var connectedSlot     = IconPreferences.slot(for: .connected)
     @State private var blockedSlot       = IconPreferences.slot(for: .blocked)
     @State private var noNetworkSlot     = IconPreferences.slot(for: .noNetwork)
@@ -31,23 +29,20 @@ struct SettingsView: View {
     @State private var showCopiedToast   = false
     @State private var copiedSymbolName  = ""
 
-    // MARK: - Body
-
     var body: some View {
         VStack(spacing: 0) {
 
-            SettingsTabBar(
-                selected: $selectedTab,
-                tabs: [
-                    (icon: "gearshape.fill",  label: "General"),
-                    (icon: "paintbrush.fill", label: "Appearance")
-                ]
-            )
+            Picker("", selection: $selectedTab) {
+                Label("General",    systemImage: "gearshape.fill").tag(0)
+                Label("Appearance", systemImage: "paintbrush.fill").tag(1)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .controlSize(.large)
+            .frame(maxWidth: .infinity)
             .padding(.horizontal, 20)
             .padding(.top, 16)
             .padding(.bottom, 14)
-
-            Divider()
 
             Group {
                 if selectedTab == 0 {
@@ -59,7 +54,8 @@ struct SettingsView: View {
             .animation(.easeInOut(duration: 0.18), value: selectedTab)
         }
         .frame(width: 440)
-        
+        .background(Color(.windowBackgroundColor))
+
         .sheet(isPresented: $showSymbolBrowser) {
             SymbolBrowserView()
         }
@@ -82,8 +78,8 @@ struct SettingsView: View {
                 .padding(.vertical, 10)
                 .background(
                     RoundedRectangle(cornerRadius: 10)
-                        .fill(Color(.windowBackgroundColor))
-                        .shadow(color: .black.opacity(0.2), radius: 14, y: 4)
+                        .fill(Color(.controlBackgroundColor))
+                        .shadow(color: .black.opacity(0.18), radius: 14, y: 4)
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 10)
@@ -122,10 +118,8 @@ struct SettingsView: View {
 
     private var generalTab: some View {
         ScrollView {
-            VStack(spacing: 20) {
+            VStack(spacing: 24) {
 
-
-                // General
                 SettingsSection(title: "General") {
                     SettingsRow(
                         icon: "arrow.clockwise.circle.fill",
@@ -190,7 +184,6 @@ struct SettingsView: View {
                     }
                 }
 
-                // Monitoring
                 SettingsSection(title: "Monitoring") {
                     SettingsRow(
                         icon: "clock.fill",
@@ -219,6 +212,7 @@ struct SettingsView: View {
                             }
                         }
                     }
+                    
 
                     HStack(spacing: 0) {
                         Spacer().frame(width: 56)
@@ -238,7 +232,7 @@ struct SettingsView: View {
                                             RoundedRectangle(cornerRadius: 6)
                                                 .fill(interval == val
                                                       ? Color.accentColor.opacity(0.15)
-                                                      : Color.primary.opacity(0.05))
+                                                      : Color.primary.opacity(0.07))
                                         )
                                         .foregroundStyle(interval == val ? Color.accentColor : .secondary)
                                 }
@@ -298,14 +292,15 @@ struct SettingsView: View {
             }
             .padding(20)
         }
-        .background(Color.primary.opacity(0.04))
+        .scrollContentBackground(.hidden)
+        .background(Color(.windowBackgroundColor))
     }
 
     // MARK: - Tab 2: Appearance
 
     private var appearanceTab: some View {
         ScrollView {
-            VStack(spacing: 20) {
+            VStack(spacing: 24) {
 
                 SettingsSection(title: "Appearance") {
                     VStack(spacing: 0) {
@@ -368,7 +363,8 @@ struct SettingsView: View {
             }
             .padding(20)
         }
-        .background(Color.primary.opacity(0.04))
+        .scrollContentBackground(.hidden)
+        .background(Color(.windowBackgroundColor))
     }
 
     // MARK: - Shared footer
@@ -454,49 +450,6 @@ struct SettingsView: View {
                 NSWorkspace.shared.open(downloadURL ?? pageURL)
             }
         }
-    }
-}
-
-// MARK: - tab bar
-
-private struct SettingsTabBar: View {
-
-    @Binding var selected: Int
-    let tabs: [(icon: String, label: String)]
-
-    var body: some View {
-        HStack(spacing: 4) {
-            ForEach(tabs.indices, id: \.self) { i in
-                Button {
-                    withAnimation(.spring(response: 0.28, dampingFraction: 0.72)) {
-                        selected = i
-                    }
-                } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: tabs[i].icon)
-                            .font(.system(size: 11, weight: .semibold))
-                        Text(tabs[i].label)
-                            .font(.system(size: 12, weight: selected == i ? .semibold : .medium))
-                    }
-                    .foregroundStyle(selected == i ? .primary : .secondary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 7)
-                    .background {
-                        if selected == i {
-                            RoundedRectangle(cornerRadius: 8)
-                                .fill(Color(.windowBackgroundColor))
-                                .shadow(color: .black.opacity(0.08), radius: 4, y: 2)
-                        }
-                    }
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(4)
-        .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(Color.primary.opacity(0.06))
-        )
     }
 }
 
@@ -602,33 +555,28 @@ private struct IconSlotRow: View {
     }
 }
 
-// MARK: - Reusable section container
+// MARK: - Section container
 
 private struct SettingsSection<Content: View>: View {
     let title: String
     @ViewBuilder let content: Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text(title.uppercased())
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.tertiary)
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.primary)
                 .padding(.horizontal, 4)
-                .padding(.bottom, 6)
 
             VStack(spacing: 0) {
                 content
             }
-            .background(
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(Color(.windowBackgroundColor))
-                    .shadow(color: .black.opacity(0.04), radius: 1, y: 1)
-            )
+            .background(Color(.quaternarySystemFill))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
             .overlay(
                 RoundedRectangle(cornerRadius: 10)
-                    .strokeBorder(Color.primary.opacity(0.07), lineWidth: 1)
+                    .strokeBorder(Color.primary.opacity(0.09), lineWidth: 1)
             )
-            .clipShape(RoundedRectangle(cornerRadius: 10))
         }
     }
 }
