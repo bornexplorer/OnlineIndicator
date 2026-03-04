@@ -34,7 +34,7 @@ You can also customize the icon using Apple’s SF Symbols and choose your own c
 
 - **Live status in the menu bar** — see at a glance if you're online, blocked, or offline
 - **Three distinct states** — Connected, Blocked (network up but no internet), and No Network
-- **Customisable check interval** — from every 30 seconds to every hour
+- **Customisable check interval** — 30 seconds(default) or set your own
 - **Custom ping URL** — test against any endpoint you choose, not just the default
 - **Fully customisable icons** — choose any SF Symbol and any colour for each state
 - **Optional menu bar label** — add a short text label alongside the icon
@@ -67,7 +67,7 @@ xattr -dr com.apple.quarantine /Applications/Online\ Indicator.app
 Then open the app normally.
 
 > 💡 **Why does this happen?**
-> Apple requires a $99/year developer certificate to "notarise" apps. Online Indicator is free and independent, so it skips that. The warning is Apple's way of flagging uncertified apps — not a sign that anything is wrong.
+> Apple requires a $99/year developer certificate to "notarise" apps. Online Indicator is free and independent, so it skips that. The warning is Apple's way of flagging uncertified apps, not a sign that anything is wrong.
 
 <br>
 
@@ -79,10 +79,10 @@ Online Indicator collects no data. Period.
 - No personal information collected or transmitted
 - All preferences are stored locally on your Mac
 
-The only outbound network request the app makes is the connectivity probe — a simple HTTP request to `captive.apple.com` (or your custom URL) to check if the internet is reachable. This is identical to what macOS itself does internally.
+The only outbound network request the app makes is the connectivity probe, a simple HTTP request to `captive.apple.com` (or your custom URL) to check if the internet is reachable. This is identical to what macOS itself does internally.
 
 <br>
 
 ## License
 
-[MIT License](LICENSE).
+[MIT License](LICENSE)
