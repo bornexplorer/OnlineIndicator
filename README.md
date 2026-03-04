@@ -32,10 +32,9 @@ The macOS WiFi icon only shows that you are connected to a router, not whether y
 
 🛜 **Ditch the boring Wi-Fi icon** <br>
 Your menu bar deserves better than a grey Wi-Fi symbol that tells you nothing. Online Indicator replaces it with a live status icon that actually means something: <br>
-🟢 Green when you're online <br>
-🟡 Yellow when something's off <br>
-🔴 Red when you're out <br>
-Three states, always in sight, no guessing.
+- Green when you're online <br>
+- Yellow when something's off <br>
+- Red when you're out
 
 🎨 **Make it yours** <br>
 Choose any SF Symbol as your icon, pick any colour for each state, add a custom text label that shows right in the menu bar, or apply one of 15 ready-made Icon Sets to change the whole look in a single tap.
