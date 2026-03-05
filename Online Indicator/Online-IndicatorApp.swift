@@ -273,7 +273,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
         NSRect(origin: .zero, size: tinted.size).fill(using: .sourceAtop)
         tinted.unlockFocus()
 
-        let rawLabel  = String(pref.menuLabel.prefix(10)).trimmingCharacters(in: .whitespaces)
+        let rawLabel  = String(pref.menuLabel.prefix(15)).trimmingCharacters(in: .whitespaces)
         let showLabel = pref.menuLabelEnabled && !rawLabel.isEmpty
         let barHeight = NSStatusBar.system.thickness
         let iconSize  = tinted.size
