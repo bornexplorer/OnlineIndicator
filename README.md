@@ -9,9 +9,9 @@ A macOS menu bar app that replaces the Wi-Fi icon with customisable status indic
 </p>
 <br>
 <p align="center">
-  <img src="https://img.shields.io/github/v/release/bornexplorer/OnlineIndicator?style=flat&color=%23FE9325">
-  <img src="https://img.shields.io/badge/platform-macOS-lightgrey?logo=apple&style=flat">
-  <img src="https://img.shields.io/github/license/bornexplorer/OnlineIndicator?style=flat&color=%2347FF32">
+  <img src="https://img.shields.io/github/v/release/bornexplorer/OnlineIndicator?style=flat&color=%23FE9326">
+  <img src="https://img.shields.io/badge/platform-macOS-lightgrey?logo=apple&style=flat&color=%231a1a1a">
+  <img src="https://img.shields.io/github/license/bornexplorer/OnlineIndicator?style=flat&color=%23248636">
 </p>
 
 <br>
