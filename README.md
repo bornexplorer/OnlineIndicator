@@ -5,7 +5,7 @@
 <h1 align="center">Online Indicator</h1>
 
 <p align="center">
-A macOS menu bar app that replaces the Wi-Fi icon with customisable status indicators.
+A macOS menu bar app that replaces the Wi-Fi icon with customizable status indicators.
 </p>
 <br>
 <p align="center">
@@ -35,7 +35,7 @@ Your menu bar deserves better than a grey Wi-Fi symbol that tells you nothing. O
 - Red when there's no network
 
 🎨 **Make it yours** <br>
-Choose from 17 ready made Icon Sets or use any SF Symbol, set custom colours and labels for each state, and save your setup as your own Icon Set to switch anytime with a single tap.
+Choose from 17 ready made Icon Sets or use any SF Symbol, set custom colors and labels for each state, and save your setup as your own Icon Set to switch anytime with a single tap.
 
 📡 **Flexible monitoring** <br>
 Choose any URL to ping and set how often the check runs, from every 30 seconds to once an hour.
