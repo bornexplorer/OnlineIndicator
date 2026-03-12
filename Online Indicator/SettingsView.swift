@@ -10,6 +10,7 @@ struct SettingsView: View {
     }()
     @State private var intervalText     = ""
     @State private var intervalSaved    = false
+    @State private var intervalInvalid  = false
     @State private var pingURL          = ""
     @State private var pingURLSaved     = false
     @State private var pingURLInvalid   = false
@@ -275,6 +276,15 @@ struct SettingsView: View {
                                 .textFieldStyle(.roundedBorder)
                                 .frame(width: 56)
                                 .multilineTextAlignment(.trailing)
+                                .onChange(of: intervalText) { _, newValue in
+                                    // Strip anything that isn't a digit
+                                    let digitsOnly = newValue.filter { $0.isNumber }
+                                    if digitsOnly != newValue {
+                                        intervalText = digitsOnly
+                                    }
+                                    // Clear the error as soon as the user edits
+                                    if intervalInvalid { intervalInvalid = false }
+                                }
 
                             Text("sec")
                                 .foregroundStyle(.secondary)
@@ -295,6 +305,24 @@ struct SettingsView: View {
                         .animation(.easeInOut(duration: 0.18), value: intervalSaved)
                     }
 
+                    // Inline error shown when value is below 1 second
+                    if intervalInvalid {
+                        HStack(spacing: 0) {
+                            Spacer().frame(width: 56)
+                            HStack(spacing: 4) {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .font(.system(size: 9))
+                                Text("Minimum interval is 1 second")
+                                    .font(.system(size: 10))
+                            }
+                            .foregroundStyle(.red)
+                            .transition(.opacity.combined(with: .move(edge: .top)))
+                            Spacer()
+                        }
+                        .padding(.bottom, 4)
+                        .animation(.easeInOut(duration: 0.18), value: intervalInvalid)
+                    }
+
                     HStack(spacing: 0) {
                         Spacer().frame(width: 56)
                         HStack(spacing: 6) {
@@ -303,6 +331,7 @@ struct SettingsView: View {
                                     withAnimation(.easeInOut(duration: 0.15)) {
                                         interval     = val
                                         intervalText = formatInterval(val)
+                                        intervalInvalid = false
                                     }
                                 } label: {
                                     Text(lbl)
@@ -590,8 +619,16 @@ struct SettingsView: View {
     }
 
     private func applyInterval() {
-        let value = Double(intervalText) ?? 60
-        interval  = value
+        let value = Double(intervalText) ?? 0
+
+        // Enforce minimum of 1 second
+        guard value >= 1 else {
+            withAnimation { intervalInvalid = true }
+            return
+        }
+
+        intervalInvalid = false
+        interval        = value
         UserDefaults.standard.set(value, forKey: "refreshInterval")
         AppState.shared.restart()
 
