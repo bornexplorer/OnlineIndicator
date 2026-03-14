@@ -149,12 +149,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
 
         var insertionIndex = anchorIndex
 
-        // Section header
-        let headerItem = NSMenuItem(title: "Known Networks", action: nil, keyEquivalent: "")
-        headerItem.attributedTitle = NSAttributedString(string: "Known Networks", attributes: [
-            .font: NSFont.systemFont(ofSize: 11, weight: .semibold),
-            .foregroundColor: NSColor.secondaryLabelColor
-        ])
+        // Section header — uses a custom view to avoid the image column indent
+        let headerLabel = NSTextField(labelWithString: "Known Networks")
+        headerLabel.font = .systemFont(ofSize: 11, weight: .semibold)
+        headerLabel.textColor = .secondaryLabelColor
+        headerLabel.sizeToFit()
+        let headerView = NSView(frame: NSRect(x: 0, y: 0, width: 260, height: headerLabel.frame.height + 8))
+        headerLabel.frame.origin = NSPoint(x: 14, y: 4)
+        headerView.addSubview(headerLabel)
+        let headerItem = NSMenuItem()
+        headerItem.view = headerView
         headerItem.isEnabled = false
         headerItem.tag = knownNetworksTag + 1
         menu.insertItem(headerItem, at: insertionIndex)
@@ -167,10 +171,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
             let isConnected = currentSSID != nil && ssid == currentSSID
             let isSecured = profile.security != .none
 
-            let item = NSMenuItem(title: ssid, action: nil, keyEquivalent: "")
-            item.isEnabled = false
+            let item = NSMenuItem(title: ssid, action: #selector(openWiFiSettings), keyEquivalent: "")
+            item.target = self
             item.tag = knownNetworksTag + 1
-            item.indentationLevel = 1
+
+            // Disable the currently connected network
+            item.isEnabled = !isConnected
 
             // Wi-Fi icon
             let symbolConfig = NSImage.SymbolConfiguration(pointSize: 13, weight: .medium)
@@ -220,6 +226,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
         let trailingSep = NSMenuItem.separator()
         trailingSep.tag = knownNetworksTag + 1
         menu.insertItem(trailingSep, at: insertionIndex)
+    }
+
+    @objc private func openWiFiSettings() {
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.wifi-settings-extension")!)
     }
 
     // MARK: - Menu Setup
