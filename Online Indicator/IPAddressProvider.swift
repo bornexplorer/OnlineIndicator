@@ -1,17 +1,20 @@
 import Foundation
 import Darwin
+import CoreWLAN
 
 struct IPAddressProvider {
 
     struct Addresses {
         var ipv4: String?
         var ipv6: String?
+        var wifiName: String?
     }
 
-    /// Reads the current IPv4 and IPv6 addresses from the active primary network interface.
+    /// Reads the current IPv4, IPv6, and Wi-Fi network name from the active primary network interface.
     /// Prefers en0 (Wi-Fi) then en1/en2 (Ethernet). Strips the scope-ID suffix from IPv6.
     static func current() -> Addresses {
         var result = Addresses()
+        result.wifiName = CWWiFiClient.shared().interface()?.ssid()
 
         var ifaddr: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&ifaddr) == 0 else { return result }

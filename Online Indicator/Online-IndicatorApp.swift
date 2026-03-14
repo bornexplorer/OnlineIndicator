@@ -23,10 +23,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
     private var launchPopover: NSPopover?
 
     private var menuHeaderView: MenuHeaderView?
+    private var wifiMenuItem: NSMenuItem?
     private var ipv4MenuItem: NSMenuItem?
     private var ipv6MenuItem: NSMenuItem?
 
     private var currentStatus: AppState.ConnectionStatus = .noNetwork
+    private var lastWifiName: String?
     private var lastIPv4: String?
     private var lastIPv6: String?
 
@@ -83,9 +85,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
 
     func menuWillOpen(_ menu: NSMenu) {
         let addresses = IPAddressProvider.current()
+        lastWifiName = addresses.wifiName
         lastIPv4 = addresses.ipv4
         lastIPv6 = addresses.ipv6
 
+        wifiMenuItem?.attributedTitle = ipAttributedString(
+            label: "WiFi",
+            value: addresses.wifiName ?? "Unavailable",
+            available: addresses.wifiName != nil
+        )
         ipv4MenuItem?.attributedTitle = ipAttributedString(
             label: "IPv4",
             value: addresses.ipv4 ?? "Unavailable",
@@ -116,6 +124,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
         menu.addItem(headerItem)
 
         menu.addItem(.separator())
+
+        let wifiItem = NSMenuItem(title: "", action: #selector(copyWifiName), keyEquivalent: "")
+        wifiItem.target = self
+        wifiItem.toolTip = "Click to copy"
+        wifiItem.attributedTitle = ipAttributedString(label: "WiFi", value: "Loading…", available: false)
+        wifiMenuItem = wifiItem
+        menu.addItem(wifiItem)
 
         let ipv4Item = NSMenuItem(title: "", action: #selector(copyIPv4), keyEquivalent: "")
         ipv4Item.target = self
@@ -171,6 +186,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
     }
 
     // MARK: - Copy actions
+
+    @objc private func copyWifiName() {
+        guard let name = lastWifiName else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(name, forType: .string)
+        showCopiedTooltip(text: "WiFi Copied")
+    }
 
     @objc private func copyIPv4() {
         guard let ip = lastIPv4 else { return }
