@@ -49,6 +49,12 @@ class AppState {
         checkConnection()
     }
 
+    // MARK: - Immediate check (bypasses interval, triggered on demand)
+
+    func checkNow() {
+        checkConnection()
+    }
+
     // MARK: - Timer
 
     private func startTimer() {

@@ -16,6 +16,11 @@ struct SettingsView: View {
     @State private var pingURLInvalid   = false
     @State private var isLaunchEnabled  = false
 
+    // Click actions — defaults mirror the registered UserDefaults factory defaults
+    @State private var leftRightClickEnabled = true
+    @State private var leftClickAction       = "wifi"
+    @State private var rightClickAction      = "menu"
+
     enum UpdateStatus: Equatable {
         case idle, checking
         case available(tag: String)
@@ -38,6 +43,20 @@ struct SettingsView: View {
     @State private var suppressSaveButton       = false
     @State private var showSetSavedConfirmation = false
 
+    // MARK: - Click action option definitions
+
+    private let leftClickOptions: [(label: String, tag: String)] = [
+        ("Open Wi-Fi Settings",          "wifi"),
+        ("Check Connection Now",         "checkNow"),
+        ("Online Indicator Settings",    "settings"),
+        ("Online Indicator Menu",        "menu")
+    ]
+
+    private let rightClickOptions: [(label: String, tag: String)] = [
+        ("Online Indicator Settings",    "settings"),
+        ("Online Indicator Menu",        "menu")
+    ]
+
     // MARK: - Modified-from-defaults check
 
     private func colorDiffers(_ a: NSColor, _ b: NSColor) -> Bool {
@@ -59,7 +78,7 @@ struct SettingsView: View {
                noNetworkSlot.symbolName  != dn.symbolName || colorDiffers(noNetworkSlot.color,  dn.color) ||
                noNetworkSlot.menuLabel   != dn.menuLabel  || noNetworkSlot.menuLabelEnabled != dn.menuLabelEnabled
     }
-    
+
     private var currentSlotsMatchAnySavedSet: Bool {
         let (c, b, n) = (connectedSlot, blockedSlot, noNetworkSlot)
         return userSetsStore.sets.contains { set in
@@ -79,7 +98,7 @@ struct SettingsView: View {
         !showSetSavedConfirmation &&
         !currentSlotsMatchAnySavedSet
     }
-    
+
     private func onSlotChanged() {
         if suppressSaveButton && !currentSlotsMatchAnySavedSet {
             withAnimation(.easeInOut(duration: 0.2)) {
@@ -173,18 +192,24 @@ struct SettingsView: View {
             }
         }
         .onAppear {
-            isLaunchEnabled = LoginItemManager.shared.isEnabled()
-            intervalText    = formatInterval(interval)
-            pingURL         = UserDefaults.standard.string(forKey: "pingURL") ?? ""
-            connectedSlot   = IconPreferences.slot(for: .connected)
-            blockedSlot     = IconPreferences.slot(for: .blocked)
-            noNetworkSlot   = IconPreferences.slot(for: .noNetwork)
+            isLaunchEnabled       = LoginItemManager.shared.isEnabled()
+            intervalText          = formatInterval(interval)
+            pingURL               = UserDefaults.standard.string(forKey: "pingURL") ?? ""
+            connectedSlot         = IconPreferences.slot(for: .connected)
+            blockedSlot           = IconPreferences.slot(for: .blocked)
+            noNetworkSlot         = IconPreferences.slot(for: .noNetwork)
+            leftRightClickEnabled = UserDefaults.standard.bool(forKey: "leftRightClickEnabled")
+            leftClickAction       = UserDefaults.standard.string(forKey: "leftClickAction")  ?? "wifi"
+            rightClickAction      = UserDefaults.standard.string(forKey: "rightClickAction") ?? "menu"
         }
         .onReceive(NotificationCenter.default.publisher(for: .settingsWindowDidBecomeKey)) { _ in
-            isLaunchEnabled = LoginItemManager.shared.isEnabled()
-            connectedSlot   = IconPreferences.slot(for: .connected)
-            blockedSlot     = IconPreferences.slot(for: .blocked)
-            noNetworkSlot   = IconPreferences.slot(for: .noNetwork)
+            isLaunchEnabled       = LoginItemManager.shared.isEnabled()
+            connectedSlot         = IconPreferences.slot(for: .connected)
+            blockedSlot           = IconPreferences.slot(for: .blocked)
+            noNetworkSlot         = IconPreferences.slot(for: .noNetwork)
+            leftRightClickEnabled = UserDefaults.standard.bool(forKey: "leftRightClickEnabled")
+            leftClickAction       = UserDefaults.standard.string(forKey: "leftClickAction")  ?? "wifi"
+            rightClickAction      = UserDefaults.standard.string(forKey: "rightClickAction") ?? "menu"
         }
     }
 
@@ -210,13 +235,49 @@ struct SettingsView: View {
 
                     Divider().padding(.leading, 56)
 
+                    // MARK: Click Actions
+
+                    SettingsRow(
+                        icon: "cursorarrow.rays",
+                        iconColor: .yellow,
+                        title: "Click Actions",
+                        subtitle: "Assign actions to left and right click"
+                    ) {
+                        Toggle("", isOn: $leftRightClickEnabled)
+                            .labelsHidden()
+                            .onChange(of: leftRightClickEnabled) { _, newValue in
+                                UserDefaults.standard.set(newValue, forKey: "leftRightClickEnabled")
+                            }
+                    }
+
+                    ClickActionRow(
+                        label: "Left click",
+                        selection: $leftClickAction,
+                        options: leftClickOptions,
+                        enabled: leftRightClickEnabled
+                    ) {
+                        UserDefaults.standard.set(leftClickAction, forKey: "leftClickAction")
+                    }
+
+                    Divider().padding(.leading, 56)
+
+                    ClickActionRow(
+                        label: "Right click",
+                        selection: $rightClickAction,
+                        options: rightClickOptions,
+                        enabled: leftRightClickEnabled
+                    ) {
+                        UserDefaults.standard.set(rightClickAction, forKey: "rightClickAction")
+                    }
+
+                    Divider().padding(.leading, 56)
+
                     SettingsRow(
                         icon: "arrow.down.circle.fill",
                         iconColor: .blue,
                         title: "Check for Updates",
                         subtitle: "Version \(AppInfo.marketingVersion) (Build \(AppInfo.buildVersion))"
                     ) {
-                        
                         HStack(spacing: 8) {
                             switch updateStatus {
                             case .idle:
@@ -488,7 +549,6 @@ struct SettingsView: View {
 
                         Divider().padding(.leading, 14)
 
-                        
                         VStack(spacing: 0) {
                             HStack(spacing: 10) {
 
@@ -501,7 +561,6 @@ struct SettingsView: View {
                                 }
                                 .buttonStyle(.plain)
 
-                                
                                 if showSetSavedConfirmation {
                                     HStack(spacing: 4) {
                                         Image(systemName: "checkmark.circle.fill")
@@ -726,6 +785,43 @@ struct SettingsView: View {
     private func openLatestRelease() {
         guard let url = cachedUpdateURL else { return }
         NSWorkspace.shared.open(url)
+    }
+}
+
+// MARK: - Click Action Sub-Row
+
+private struct ClickActionRow: View {
+    let label: String
+    @Binding var selection: String
+    let options: [(label: String, tag: String)]
+    let enabled: Bool
+    let onChanged: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Spacer().frame(width: 56)
+
+            Text(label)
+                .font(.system(size: 12))
+                .foregroundStyle(.primary)
+
+            Spacer()
+
+            Picker("", selection: $selection) {
+                ForEach(options, id: \.tag) { option in
+                    Text(option.label).tag(option.tag)
+                }
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .frame(width: 210)
+            .disabled(!enabled)
+            .onChange(of: selection) { _, _ in onChanged() }
+        }
+        .padding(.trailing, 14)
+        .padding(.vertical, 8)
+        .opacity(enabled ? 1 : 0.4)
+        .animation(.easeInOut(duration: 0.18), value: enabled)
     }
 }
 

@@ -26,6 +26,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
     private var ipv4MenuItem: NSMenuItem?
     private var ipv6MenuItem: NSMenuItem?
 
+    private var mainMenu: NSMenu?
+
     private var currentStatus: AppState.ConnectionStatus = .noNetwork
     private var lastIPv4: String?
     private var lastIPv6: String?
@@ -33,6 +35,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
     // MARK: - Lifecycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+
+        // Register factory defaults — only applied when a key has never been set by the user
+        UserDefaults.standard.register(defaults: [
+            "leftRightClickEnabled": true,
+            "leftClickAction":       "wifi",
+            "rightClickAction":      "menu"
+        ])
 
         UserDefaults.standard.set(Date(), forKey: "lastLaunchDate")
 
@@ -145,7 +154,60 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
         quitItem.image = NSImage(systemSymbolName: "power", accessibilityDescription: nil)
         menu.addItem(quitItem)
 
-        statusItem.menu = menu
+        // Store menu as instance var; do NOT assign to statusItem.menu so
+        // left/right click differentiation works via the button action.
+        mainMenu = menu
+
+        statusItem.button?.target = self
+        statusItem.button?.action = #selector(handleStatusItemClick)
+        statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
+    }
+
+    // MARK: - Click Handling
+
+    @objc private func handleStatusItemClick() {
+        guard let event = NSApp.currentEvent else { return }
+
+        let enabled     = UserDefaults.standard.bool(forKey: "leftRightClickEnabled")
+        let leftAction  = UserDefaults.standard.string(forKey: "leftClickAction")  ?? "wifi"
+        let rightAction = UserDefaults.standard.string(forKey: "rightClickAction") ?? "menu"
+
+        let action: String
+        if enabled {
+            action = (event.type == .leftMouseUp) ? leftAction : rightAction
+        } else {
+            action = "menu"
+        }
+
+        performAction(action)
+    }
+
+    private func performAction(_ action: String) {
+        switch action {
+        case "wifi":
+            openWiFiSettings()
+        case "checkNow":
+            AppState.shared.checkNow()
+        case "settings":
+            openSettings()
+        default: // "menu"
+            showDropdownMenu()
+        }
+    }
+
+    private func showDropdownMenu() {
+        // Temporarily attach the menu so the system shows it, then detach.
+        // The menu system retains its own reference while it is on screen,
+        // so NSMenuDelegate's menuWillOpen still fires correctly.
+        statusItem.menu = mainMenu
+        statusItem.button?.performClick(nil)
+        statusItem.menu = nil
+    }
+
+    private func openWiFiSettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.wifi-settings-extension") {
+            NSWorkspace.shared.open(url)
+        }
     }
 
     // MARK: - IP attributed string
@@ -187,6 +249,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
     }
 
     // MARK: - Popover helper
+
     private func showStatusPopover<Content: View>(content: Content, autoDismissAfter delay: Double) {
         guard let button = statusItem.button else { return }
 
@@ -327,7 +390,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
 
     // MARK: - Settings
 
-    @objc private func openSettings() {
+    @objc func openSettings() {
         if let existing = settingsWindow {
             existing.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
