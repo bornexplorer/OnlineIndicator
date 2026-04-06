@@ -94,6 +94,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
             self.showConnectionStatusNotification(status)
         }
 
+        AppState.shared.checkNowResultHandler = { [weak self] status in
+            guard let self else { return }
+            self.showConnectionStatusNotification(status)
+        }
+
         AppState.shared.start()
 
         if wifiInterface != nil {

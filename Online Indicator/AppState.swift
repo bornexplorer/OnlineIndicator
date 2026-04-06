@@ -18,6 +18,8 @@ class AppState {
 
     var statusUpdateHandler: ((ConnectionStatus) -> Void)?
 
+    var checkNowResultHandler: ((ConnectionStatus) -> Void)?
+
     var refreshInterval: TimeInterval {
         let saved = UserDefaults.standard.double(forKey: "refreshInterval")
         return saved == 0 ? 30 : saved
@@ -52,7 +54,7 @@ class AppState {
     // MARK: - Immediate check (bypasses interval, triggered on demand)
 
     func checkNow() {
-        checkConnection()
+        checkConnection(onDemand: true)
     }
 
     // MARK: - Timer
@@ -85,18 +87,20 @@ class AppState {
 
     // MARK: - Core Logic
 
-    private func checkConnection() {
+    private func checkConnection(onDemand: Bool = false) {
 
         if !networkMonitor.isConnected {
-            statusUpdateHandler?(.noNetwork)
+            let status = ConnectionStatus.noNetwork
+            statusUpdateHandler?(status)
+            if onDemand { checkNowResultHandler?(status) }
             return
         }
 
-        // Attempt outbound request
         connectivityChecker.checkOutboundConnection { [weak self] reachable in
-
             DispatchQueue.main.async {
-                self?.statusUpdateHandler?(reachable ? .connected : .blocked)
+                let status: ConnectionStatus = reachable ? .connected : .blocked
+                self?.statusUpdateHandler?(status)
+                if onDemand { self?.checkNowResultHandler?(status) }
             }
         }
     }
