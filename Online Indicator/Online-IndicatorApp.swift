@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import CoreWLAN
 
 @main
 struct OnlineIndicatorApp: App {
@@ -7,9 +8,7 @@ struct OnlineIndicatorApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
-        Settings {
-            EmptyView()
-        }
+        Settings { EmptyView() }
     }
 }
 
@@ -20,30 +19,37 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
     private var statusItem: NSStatusItem!
     private var onboardingWindow: NSWindow?
     private var settingsWindow: NSWindow?
-    private var launchPopover: NSPopover?
 
-    private var menuHeaderView: MenuHeaderView?
-    private var ipv4MenuItem: NSMenuItem?
-    private var ipv6MenuItem: NSMenuItem?
-
-    private var mainMenu: NSMenu?
+    private var wifiToggleView:       MenuWiFiToggleView?
+    private var networkSectionHeader: NSMenuItem?
+    private var ipv4MenuItem:         NSMenuItem?
+    private var ipv6MenuItem:         NSMenuItem?
+    private var mainMenu:             NSMenu?
 
     private var currentStatus: AppState.ConnectionStatus = .noNetwork
     private var lastIPv4: String?
     private var lastIPv6: String?
 
+    private var hasInitialized        = false
+    private var lastWiFiPowerChangeDate: Date?
+    private var lastKnownSSID: String?
+    private var appInitiatedWiFiToggle = false
+    private var activePopover: NSPopover?
+    private var wifiPowerDebounce: Timer?
+    private var ssidDebounce:      Timer?
+
     // MARK: - Lifecycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-
-        // Register factory defaults — only applied when a key has never been set by the user
         UserDefaults.standard.register(defaults: [
             "leftRightClickEnabled": true,
             "leftClickAction":       "wifi",
-            "rightClickAction":      "menu"
+            "rightClickAction":      "menu",
+            "leftRightClickSwapped": false,
+            "hideIPv4":              false,
+            "hideIPv6":              false,
+            "useSSIDAsMenuBarLabel": false
         ])
-
-        UserDefaults.standard.set(Date(), forKey: "lastLaunchDate")
 
         if UserDefaults.standard.object(forKey: "refreshInterval") == nil {
             showOnboarding()
@@ -55,56 +61,99 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
     private func startApp() {
         setupStatusItem()
 
+        fetchSSIDFromAirport { [weak self] ssid in
+            self?.lastKnownSSID = ssid
+        }
+
         AppState.shared.statusUpdateHandler = { [weak self] status in
-            self?.currentStatus = status
-            self?.updateIcon(for: status)
+            guard let self else { return }
+
+            let previous = self.currentStatus
+            self.currentStatus = status
+            self.updateIcon(for: status)
+
+            if UserDefaults.standard.bool(forKey: "useSSIDAsMenuBarLabel"),
+               status == .connected || status == .blocked {
+                self.fetchSSIDFromAirport { [weak self] ssid in
+                    guard let self else { return }
+                    if let ssid, ssid != self.lastKnownSSID {
+                        self.lastKnownSSID = ssid
+                        self.updateIcon(for: self.currentStatus)
+                    }
+                }
+            }
+
+            guard self.hasInitialized else { self.hasInitialized = true; return }
+
+            // Suppress duplicate notifications triggered by Wi-Fi power events.
+            if let pwDate = self.lastWiFiPowerChangeDate,
+               Date().timeIntervalSince(pwDate) < 3.5 { return }
+
+            guard status != previous else { return }
+
+            self.showConnectionStatusNotification(status)
         }
 
         AppState.shared.start()
+
+        if wifiInterface != nil {
+            CWWiFiClient.shared().delegate = self
+            try? CWWiFiClient.shared().startMonitoringEvent(with: .powerDidChange)
+            try? CWWiFiClient.shared().startMonitoringEvent(with: .ssidDidChange)
+        }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             self.showLaunchTooltip()
         }
 
         NotificationCenter.default.addObserver(
-            forName: .iconPreferencesChanged,
-            object: nil,
-            queue: .main
+            forName: .iconPreferencesChanged, object: nil, queue: .main
         ) { [weak self] _ in
             guard let self else { return }
-            self.updateIcon(for: self.currentStatus)
+            if UserDefaults.standard.bool(forKey: "useSSIDAsMenuBarLabel") {
+                self.fetchSSIDFromAirport { [weak self] ssid in
+                    guard let self else { return }
+                    if let ssid { self.lastKnownSSID = ssid }
+                    self.updateIcon(for: self.currentStatus)
+                }
+            } else {
+                self.updateIcon(for: self.currentStatus)
+            }
         }
     }
 
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        return false
-    }
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
     // MARK: - NSWindowDelegate
 
     func windowWillClose(_ notification: Notification) {
-        if (notification.object as? NSWindow) === settingsWindow {
-            settingsWindow = nil
-        }
+        if (notification.object as? NSWindow) === settingsWindow { settingsWindow = nil }
     }
 
     // MARK: - NSMenuDelegate
 
     func menuWillOpen(_ menu: NSMenu) {
+        updateWiFiToggleView()
+
         let addresses = IPAddressProvider.current()
         lastIPv4 = addresses.ipv4
         lastIPv6 = addresses.ipv6
 
-        ipv4MenuItem?.attributedTitle = ipAttributedString(
-            label: "IPv4",
-            value: addresses.ipv4 ?? "Unavailable",
-            available: addresses.ipv4 != nil
-        )
-        ipv6MenuItem?.attributedTitle = ipAttributedString(
-            label: "IPv6",
-            value: addresses.ipv6 ?? "Unavailable",
-            available: addresses.ipv6 != nil
-        )
+        let hideIPv4 = UserDefaults.standard.bool(forKey: "hideIPv4")
+        let hideIPv6 = UserDefaults.standard.bool(forKey: "hideIPv6")
+
+        ipv4MenuItem?.isHidden = hideIPv4
+        ipv6MenuItem?.isHidden = hideIPv6
+        networkSectionHeader?.isHidden = hideIPv4 && hideIPv6
+
+        if !hideIPv4 {
+            ipv4MenuItem?.attributedTitle = ipAttributedString(
+                label: "IPv4", value: addresses.ipv4 ?? "Unavailable", available: addresses.ipv4 != nil)
+        }
+        if !hideIPv6 {
+            ipv6MenuItem?.attributedTitle = ipAttributedString(
+                label: "IPv6", value: addresses.ipv6 ?? "Unavailable", available: addresses.ipv6 != nil)
+        }
     }
 
     // MARK: - Menu Setup
@@ -115,16 +164,25 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
 
         let menu = NSMenu()
         menu.delegate = self
-        menu.minimumWidth = 260
+        menu.minimumWidth = 280
 
-        let header = MenuHeaderView(frame: NSRect(x: 0, y: 0, width: 260, height: 28))
-        menuHeaderView = header
-        let headerItem = NSMenuItem()
-        headerItem.view = header
-        headerItem.isEnabled = false
-        menu.addItem(headerItem)
+        let toggleView = MenuWiFiToggleView(frame: NSRect(x: 0, y: 0, width: 280, height: 26))
+        toggleView.toggleAction = { [weak self] in self?.performWiFiToggleFromMenu() }
+        wifiToggleView = toggleView
+        let toggleItem = NSMenuItem()
+        toggleItem.view = toggleView
+        menu.addItem(toggleItem)
+
+        let wifiSettingsItem = NSMenuItem(title: "Wi-Fi Settings…",
+                                          action: #selector(openWiFiSettingsFromMenu), keyEquivalent: "")
+        wifiSettingsItem.target = self
+        menu.addItem(wifiSettingsItem)
 
         menu.addItem(.separator())
+
+        let networkHeader = sectionHeaderItem(title: "Network")
+        networkSectionHeader = networkHeader
+        menu.addItem(networkHeader)
 
         let ipv4Item = NSMenuItem(title: "", action: #selector(copyIPv4), keyEquivalent: "")
         ipv4Item.target = self
@@ -142,20 +200,25 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
 
         menu.addItem(.separator())
 
-        let settingsItem = NSMenuItem(title: "Settings", action: #selector(openSettings), keyEquivalent: "")
+        let settingsItem = NSMenuItem(title: "Settings",
+                                      action: #selector(openSettings), keyEquivalent: "")
         settingsItem.target = self
         settingsItem.image = NSImage(systemSymbolName: "gear", accessibilityDescription: nil)
         menu.addItem(settingsItem)
 
-        menu.addItem(.separator())
-
-        let quitItem = NSMenuItem(title: "Quit \(AppInfo.appName)", action: #selector(quitApp), keyEquivalent: "")
+        let quitItem = NSMenuItem(title: "Quit", action: #selector(quitApp), keyEquivalent: "")
         quitItem.target = self
         quitItem.image = NSImage(systemSymbolName: "power", accessibilityDescription: nil)
         menu.addItem(quitItem)
 
-        // Store menu as instance var; do NOT assign to statusItem.menu so
-        // left/right click differentiation works via the button action.
+        menu.addItem(.separator())
+
+        let infoRow = MenuAppInfoView(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+        let infoItem = NSMenuItem()
+        infoItem.view      = infoRow
+        infoItem.isEnabled = false
+        menu.addItem(infoItem)
+
         mainMenu = menu
 
         statusItem.button?.target = self
@@ -163,21 +226,107 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
         statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
     }
 
+    // MARK: - Section header helper
+
+    private func sectionHeaderItem(title: String) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        item.attributedTitle = NSAttributedString(string: title, attributes: [
+            .font: NSFont.systemFont(ofSize: 10, weight: .semibold),
+            .foregroundColor: NSColor.tertiaryLabelColor
+        ])
+        return item
+    }
+
+    // MARK: - Wi-Fi helpers
+
+    private var wifiInterface: CWInterface? { CWWiFiClient.shared().interface() }
+
+    private func fetchSSIDFromAirport(completion: @escaping (String?) -> Void) {
+        DispatchQueue.global(qos: .utility).async {
+            let airportPath = "/System/Library/PrivateFrameworks/Apple80211.framework" +
+                              "/Versions/Current/Resources/airport"
+            guard FileManager.default.isExecutableFile(atPath: airportPath) else {
+                DispatchQueue.main.async { completion(nil) }
+                return
+            }
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: airportPath)
+            process.arguments     = ["-I"]
+            let pipe = Pipe()
+            process.standardOutput = pipe
+            process.standardError  = Pipe()
+            do {
+                try process.run()
+                process.waitUntilExit()
+            } catch {
+                DispatchQueue.main.async { completion(nil) }
+                return
+            }
+            let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(),
+                                encoding: .utf8) ?? ""
+            var parsed: String?
+            for line in output.components(separatedBy: "\n") {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.hasPrefix("SSID: ") {
+                    let value = String(trimmed.dropFirst("SSID: ".count))
+                        .trimmingCharacters(in: .whitespaces)
+                    if !value.isEmpty { parsed = value }
+                    break
+                }
+            }
+            DispatchQueue.main.async { completion(parsed) }
+        }
+    }
+
+    private func updateWiFiToggleView() {
+        if let iface = wifiInterface {
+            wifiToggleView?.setState(isOn: iface.powerOn(), isAvailable: true)
+        } else {
+            wifiToggleView?.setState(isOn: false, isAvailable: false)
+        }
+    }
+
+    private func performWiFiToggleFromMenu() {
+        mainMenu?.cancelTracking()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            self?.performWiFiToggle()
+        }
+    }
+
+    private func performWiFiToggle() {
+        guard let iface = wifiInterface else { return }
+        let turningOn = !iface.powerOn()
+        appInitiatedWiFiToggle = true
+        showPersistentTextNotification(turningOn ? "Turning On Wi-Fi…" : "Turning Off Wi-Fi…")
+        do { try iface.setPower(turningOn) }
+        catch {
+            appInitiatedWiFiToggle = false
+            dismissActivePopover()
+        }
+    }
+
+    @objc private func openWiFiSettingsFromMenu() {
+        showTextNotification("Opening Wi-Fi Settings")
+        openWiFiSettings()
+    }
+
     // MARK: - Click Handling
 
     @objc private func handleStatusItemClick() {
         guard let event = NSApp.currentEvent else { return }
 
-        let enabled     = UserDefaults.standard.bool(forKey: "leftRightClickEnabled")
-        let leftAction  = UserDefaults.standard.string(forKey: "leftClickAction")  ?? "wifi"
-        let rightAction = UserDefaults.standard.string(forKey: "rightClickAction") ?? "menu"
+        let enabled  = UserDefaults.standard.bool(forKey: "leftRightClickEnabled")
+        let swapped  = UserDefaults.standard.bool(forKey: "leftRightClickSwapped")
+        let leftAct  = UserDefaults.standard.string(forKey: "leftClickAction")  ?? "wifi"
+        let rightAct = UserDefaults.standard.string(forKey: "rightClickAction") ?? "menu"
 
-        let action: String
-        if enabled {
-            action = (event.type == .leftMouseUp) ? leftAction : rightAction
-        } else {
-            action = "menu"
-        }
+        guard enabled else { showDropdownMenu(); return }
+
+        let isLeft = event.type == .leftMouseUp
+        let action = swapped
+            ? (isLeft ? rightAct : leftAct)
+            : (isLeft ? leftAct  : rightAct)
 
         performAction(action)
     }
@@ -185,20 +334,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
     private func performAction(_ action: String) {
         switch action {
         case "wifi":
+            showTextNotification("Opening Wi-Fi Settings")
             openWiFiSettings()
         case "checkNow":
+            showCheckingNotification()
             AppState.shared.checkNow()
+        case "wifiToggle":
+            performWiFiToggle()
         case "settings":
             openSettings()
-        default: // "menu"
+        default:
             showDropdownMenu()
         }
     }
 
     private func showDropdownMenu() {
-        // Temporarily attach the menu so the system shows it, then detach.
-        // The menu system retains its own reference while it is on screen,
-        // so NSMenuDelegate's menuWillOpen still fires correctly.
         statusItem.menu = mainMenu
         statusItem.button?.performClick(nil)
         statusItem.menu = nil
@@ -210,25 +360,64 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
         }
     }
 
+    // MARK: - Popover notifications
+
+    private func showTextNotification(_ text: String, autoDismissAfter delay: Double = 1.5) {
+        let content = Text(text)
+            .font(.system(size: 13))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+        showStatusPopover(content: content, autoDismissAfter: delay)
+    }
+
+    private func showPersistentTextNotification(_ text: String) {
+        showTextNotification(text, autoDismissAfter: 0)
+    }
+
+    private func dismissActivePopover() {
+        activePopover?.performClose(nil)
+        activePopover = nil
+    }
+
+    // Shows a "Checking…" spinner popover and remains visible until the
+    // status update handler replaces it with the actual connection result.
+    private func showCheckingNotification() {
+        let content = HStack(spacing: 8) {
+            ProgressView()
+                .controlSize(.small)
+                .scaleEffect(0.85)
+            Text("Checking…")
+                .font(.system(size: 13))
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        showStatusPopover(content: content, autoDismissAfter: 0)
+    }
+
+    private func showConnectionStatusNotification(_ status: AppState.ConnectionStatus) {
+        let text: String = switch status {
+        case .connected: "Connected"
+        case .blocked:   "Connection Blocked"
+        case .noNetwork: "No Network"
+        }
+        showTextNotification(text)
+    }
+
     // MARK: - IP attributed string
 
     private func ipAttributedString(label: String, value: String, available: Bool) -> NSAttributedString {
         let result = NSMutableAttributedString()
-
         result.append(NSAttributedString(string: label, attributes: [
             .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .semibold),
             .foregroundColor: NSColor.tertiaryLabelColor
         ]))
-
         result.append(NSAttributedString(string: "   ", attributes: [
             .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
         ]))
-
         result.append(NSAttributedString(string: value, attributes: [
             .font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular),
             .foregroundColor: available ? NSColor.labelColor : NSColor.tertiaryLabelColor
         ]))
-
         return result
     }
 
@@ -253,6 +442,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
     private func showStatusPopover<Content: View>(content: Content, autoDismissAfter delay: Double) {
         guard let button = statusItem.button else { return }
 
+        activePopover?.performClose(nil)
+        activePopover = nil
+
         let hostingView = NSHostingView(rootView: content)
         let size = hostingView.fittingSize
         hostingView.frame = NSRect(origin: .zero, size: size)
@@ -270,8 +462,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
                             width: 2, height: button.bounds.height)
         popover.show(relativeTo: anchor, of: button, preferredEdge: .minY)
 
+        activePopover = popover
+
         if delay > 0 {
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { popover.performClose(nil) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self, weak popover] in
+                popover?.performClose(nil)
+                if self?.activePopover === popover { self?.activePopover = nil }
+            }
         }
     }
 
@@ -294,9 +491,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
         }
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 420, height: 480),
-            styleMask: [.titled, .closable],
-            backing: .buffered,
-            defer: false
+            styleMask: [.titled, .closable], backing: .buffered, defer: false
         )
         window.center()
         window.contentView = NSHostingView(rootView: view)
@@ -319,18 +514,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
 
         if NSImage(systemSymbolName: pref.symbolName, accessibilityDescription: nil) != nil {
             symbolName = pref.symbolName
-            color      = pref.color
+            color = pref.color
         } else {
             switch status {
-            case .connected: symbolName = "wifi"; color = .systemGreen
-            case .blocked:   symbolName = "wifi"; color = .systemYellow
-            case .noNetwork: symbolName = "wifi.slash";       color = .systemRed
+            case .connected: symbolName = "wifi";       color = .systemGreen
+            case .blocked:   symbolName = "wifi";       color = .systemYellow
+            case .noNetwork: symbolName = "wifi.slash"; color = .systemRed
             }
         }
 
         let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)
-        guard let baseImage = NSImage(systemSymbolName: symbolName,
-                                      accessibilityDescription: nil)?
+        guard let baseImage = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)?
             .withSymbolConfiguration(config) else { return }
 
         let tinted = baseImage.copy() as! NSImage
@@ -339,47 +533,46 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
         NSRect(origin: .zero, size: tinted.size).fill(using: .sourceAtop)
         tinted.unlockFocus()
 
-        let rawLabel  = String(pref.menuLabel.prefix(15)).trimmingCharacters(in: .whitespaces)
-        let showLabel = pref.menuLabelEnabled && !rawLabel.isEmpty
+        let useSSIDLabel = UserDefaults.standard.bool(forKey: "useSSIDAsMenuBarLabel")
+        var rawLabel  = String(pref.menuLabel.prefix(15)).trimmingCharacters(in: .whitespaces)
+        var showLabel = pref.menuLabelEnabled && !rawLabel.isEmpty
+
+        if useSSIDLabel && (status == .connected || status == .blocked) {
+            let ssid = lastKnownSSID ?? ""
+            if !ssid.isEmpty {
+                rawLabel  = String(ssid.prefix(15))
+                showLabel = true
+            }
+        }
+
         let barHeight = NSStatusBar.system.thickness
         let iconSize  = tinted.size
-        let finalImage: NSImage
 
         if showLabel {
             let font = NSFont.menuBarFont(ofSize: 12)
-
             let attachment = NSTextAttachment()
             attachment.image = tinted
             attachment.bounds = NSRect(
-                x: 0,
-                y: (font.capHeight - iconSize.height) / 2,
-                width: iconSize.width,
-                height: iconSize.height
+                x: 0, y: (font.capHeight - iconSize.height) / 2,
+                width: iconSize.width, height: iconSize.height
             )
-
             let textAttrs: [NSAttributedString.Key: Any] = [
-                .font:            font,
-                .foregroundColor: NSColor.labelColor,
-                .baselineOffset:  0
+                .font: font, .foregroundColor: NSColor.labelColor, .baselineOffset: 0
             ]
-
             let full = NSMutableAttributedString()
             full.append(NSAttributedString(attachment: attachment))
             full.append(NSAttributedString(string: " " + rawLabel, attributes: textAttrs))
-
-            button.image           = nil
-            button.imagePosition   = .noImage
+            button.image = nil
+            button.imagePosition = .noImage
             button.attributedTitle = full
             return
-        } else {
-            finalImage = NSImage(size: NSSize(width: barHeight, height: barHeight),
-                                 flipped: false) { rect in
-                let ox = (rect.width  - iconSize.width)  / 2
-                let oy = (rect.height - iconSize.height) / 2
-                tinted.draw(in: NSRect(x: ox, y: oy,
-                                       width: iconSize.width, height: iconSize.height))
-                return true
-            }
+        }
+
+        let finalImage = NSImage(size: NSSize(width: barHeight, height: barHeight), flipped: false) { rect in
+            let ox = (rect.width  - iconSize.width)  / 2
+            let oy = (rect.height - iconSize.height) / 2
+            tinted.draw(in: NSRect(x: ox, y: oy, width: iconSize.width, height: iconSize.height))
+            return true
         }
 
         finalImage.isTemplate  = false
@@ -397,15 +590,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
             NotificationCenter.default.post(name: .settingsWindowDidBecomeKey, object: nil)
             return
         }
-
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 440, height: 580),
-            styleMask: [.titled, .closable],
-            backing: .buffered,
-            defer: false
+            contentRect: NSRect(x: 0, y: 0, width: 460, height: 640),
+            styleMask: [.titled, .closable], backing: .buffered, defer: false
         )
         window.center()
         window.title = AppInfo.appName
+        window.titleVisibility = .visible
+        window.titlebarAppearsTransparent = false
         window.contentView = NSHostingView(rootView: SettingsView())
         window.isReleasedWhenClosed = false
         window.delegate = self
@@ -418,11 +610,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
     // MARK: - Launch tooltip
 
     private func showLaunchTooltip() {
-        let content = Text("\(AppInfo.appName) is running")
-            .font(.system(size: 13))
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-        showStatusPopover(content: content, autoDismissAfter: 2.0)
+        showTextNotification("\(AppInfo.appName) is running", autoDismissAfter: 2.0)
     }
 
     @objc private func quitApp() {
@@ -430,47 +618,196 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
     }
 }
 
-// MARK: - Compact Menu Header
+// MARK: - CWEventDelegate
 
-private class MenuHeaderView: NSView {
+extension AppDelegate: CWEventDelegate {
 
-    private let nameLabel    = NSTextField(labelWithString: "")
-    private let versionLabel = NSTextField(labelWithString: "")
+    func powerStateDidChangeForWiFiInterface(withName interfaceName: String) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+
+            self.lastWiFiPowerChangeDate = Date()
+
+            self.wifiPowerDebounce?.invalidate()
+            self.wifiPowerDebounce = Timer.scheduledTimer(
+                withTimeInterval: 0.3, repeats: false
+            ) { [weak self] _ in
+                guard let self, let iface = self.wifiInterface else { return }
+                let isOn = iface.powerOn()
+
+                if !isOn { self.lastKnownSSID = nil }
+
+                if self.appInitiatedWiFiToggle {
+                    // Wait for AppState to deliver the updated connection status,
+                    // which will update the icon and then show the result popover.
+                    // Do not show "Online" / "Offline" here — let the status handler do it.
+                    self.appInitiatedWiFiToggle = false
+                    self.dismissActivePopover()
+                } else {
+                    self.showTextNotification(isOn ? "Wi-Fi On" : "Wi-Fi Off")
+                }
+
+                self.updateWiFiToggleView()
+            }
+        }
+    }
+
+    func ssidDidChangeForWiFiInterface(withName interfaceName: String) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+
+            self.ssidDebounce?.invalidate()
+
+            self.ssidDebounce = Timer.scheduledTimer(
+                withTimeInterval: 2.0, repeats: false
+            ) { [weak self] _ in
+                guard let self, let iface = self.wifiInterface else { return }
+
+                self.fetchSSIDFromAirport { [weak self] ssid in
+                    guard let self else { return }
+
+                    if let ssid {
+                        self.lastKnownSSID = ssid
+                        self.updateIcon(for: self.currentStatus)
+                        return
+                    }
+
+                    guard iface.powerOn() else { return }
+                    guard self.lastKnownSSID != nil else { return }
+                    if let pwDate = self.lastWiFiPowerChangeDate,
+                       Date().timeIntervalSince(pwDate) < 4.0 { return }
+
+                    self.lastKnownSSID = nil
+                    self.showTextNotification("No Network")
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Wi-Fi Toggle Menu Row
+
+private class MenuWiFiToggleView: NSView {
+
+    var toggleAction: (() -> Void)?
+
+    private var isOn        = false
+    private var isAvailable = true
+
+    private let pillW: CGFloat = 38
+    private let pillH: CGFloat = 22
+    private let rpad:  CGFloat = 17
+
+    func setState(isOn: Bool, isAvailable: Bool) {
+        self.isOn        = isOn
+        self.isAvailable = isAvailable
+        needsDisplay = true
+    }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
-        setup()
+        wantsLayer = true
+        autoresizingMask = [.width]
+        updateTrackingAreas()
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    private func setup() {
-        wantsLayer = true
-        nameLabel.stringValue    = AppInfo.appName
-        versionLabel.stringValue = AppInfo.fullVersionString
-
-        nameLabel.font = .systemFont(ofSize: 12, weight: .semibold)
-        nameLabel.textColor = .labelColor
-        addSubview(nameLabel)
-
-        versionLabel.font = .systemFont(ofSize: 11)
-        versionLabel.textColor = .tertiaryLabelColor
-        addSubview(versionLabel)
+    private var pillRect: NSRect {
+        let pillX = bounds.width - rpad - pillW
+        let pillY = (bounds.height - pillH) / 2
+        return NSRect(x: pillX, y: pillY, width: pillW, height: pillH)
     }
 
-    override func layout() {
-        super.layout()
-        let pad: CGFloat = 14
-        let midY: CGFloat = (bounds.height - 14) / 2
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
 
-        nameLabel.frame = NSRect(x: pad, y: midY, width: bounds.width * 0.6, height: 14)
+        let lpad:     CGFloat = 17
+        let iconSize: CGFloat = 13
 
-        versionLabel.sizeToFit()
-        versionLabel.frame = NSRect(
-            x: bounds.width - pad - versionLabel.frame.width,
-            y: midY + 0.5,
-            width: versionLabel.frame.width,
-            height: 13
-        )
+        let iconColor  = isAvailable ? NSColor.labelColor : NSColor.disabledControlTextColor
+        let iconSymbol = isOn ? "wifi" : "wifi.slash"
+        if let iconImage = NSImage(systemSymbolName: iconSymbol, accessibilityDescription: nil)?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: iconSize, weight: .regular)) {
+            let tinted = iconImage.copy() as! NSImage
+            tinted.lockFocus()
+            iconColor.set()
+            NSRect(origin: .zero, size: tinted.size).fill(using: .sourceAtop)
+            tinted.unlockFocus()
+            let iconY = (bounds.height - tinted.size.height) / 2
+            tinted.draw(in: NSRect(x: lpad, y: iconY, width: tinted.size.width, height: tinted.size.height))
+        }
+
+        let titleAttrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.menuFont(ofSize: 13),
+            .foregroundColor: isAvailable ? NSColor.labelColor : NSColor.disabledControlTextColor
+        ]
+        let titleStr  = NSAttributedString(string: "Wi-Fi", attributes: titleAttrs)
+        let titleSize = titleStr.size()
+        let titleY    = (bounds.height - titleSize.height) / 2
+        titleStr.draw(at: NSPoint(x: lpad + iconSize + 6, y: titleY))
+
+        let pr = pillRect
+        let pillColor: NSColor
+        if !isAvailable {
+            pillColor = NSColor(white: 0.5, alpha: 0.4)
+        } else if isOn {
+            pillColor = NSColor.controlAccentColor
+        } else {
+            pillColor = NSColor(white: 0.48, alpha: 1.0)
+        }
+        pillColor.setFill()
+        NSBezierPath(roundedRect: pr, xRadius: pillH / 2, yRadius: pillH / 2).fill()
+
+        let knobD: CGFloat = pillH - 4
+        let knobX = isOn ? pr.minX + pillW - knobD - 2 : pr.minX + 2
+        let knobY = pr.minY + 2
+        NSColor.white.setFill()
+        NSBezierPath(ovalIn: NSRect(x: knobX, y: knobY, width: knobD, height: knobD)).fill()
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach { removeTrackingArea($0) }
+        addTrackingArea(NSTrackingArea(
+            rect: pillRect,
+            options: [.mouseEnteredAndExited, .activeAlways],
+            owner: self, userInfo: nil
+        ))
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        pillRect.contains(point) ? self : nil
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard isAvailable, pillRect.contains(convert(event.locationInWindow, from: nil)) else { return }
+        toggleAction?()
+    }
+}
+
+// MARK: - Menu App Info Row
+
+private class MenuAppInfoView: NSView {
+
+    override init(frame: NSRect) { super.init(frame: frame); wantsLayer = true }
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 11),
+            .foregroundColor: NSColor.tertiaryLabelColor
+        ]
+        let pad:  CGFloat = 14
+        let midY: CGFloat = (bounds.height - 13) / 2
+
+        let nameStr = NSAttributedString(string: AppInfo.appName, attributes: attrs)
+        nameStr.draw(at: NSPoint(x: pad, y: midY))
+
+        let versionStr = NSAttributedString(string: AppInfo.marketingVersion, attributes: attrs)
+        let versionW = versionStr.size().width
+        versionStr.draw(at: NSPoint(x: bounds.width - pad - versionW, y: midY))
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
