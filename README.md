@@ -29,19 +29,16 @@ The macOS WiFi icon only shows that you are connected to a router, not whether y
 ## Features
 
 🛜 **Ditch the boring Wi-Fi icon** <br>
-Your menu bar deserves better than a grey Wi-Fi symbol that tells you nothing. Online Indicator replaces it with a live status icon that actually means something: <br>
-- Green when you're online <br>
-- Yellow when something's off <br>
-- Red when there's no network
+Online Indicator brings a smarter network experience to your menu bar with one live status icon that clearly shows your connection and gives you quick access to Wi Fi controls and settings.
 
 🎨 **Make it yours** <br>
 Choose from 17 ready made Icon Sets or use any SF Symbol, set custom colors and labels for each state, and save your setup as your own Icon Set to switch anytime with a single tap.
 
 📡 **Flexible monitoring** <br>
-Choose any URL to ping and set how often the check runs, from every 30 seconds to once an hour.
+Choose any URL to ping and set the check frequency from every 30 seconds to once an hour, or tweak it to your liking.
 
 👀 **Quick IP peek** <br>
-Your IPv4 and IPv6 are always one click away in the menu, tap to copy instantly.
+Your IPv4 and IPv6 are always one click away in the menu. Tap to copy instantly, or hide them for a cleaner look.
 
 <br>
 
