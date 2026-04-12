@@ -97,6 +97,7 @@ struct IconPreferences {
 // MARK: - Notification name
 
 extension Notification.Name {
-    static let iconPreferencesChanged    = Notification.Name("iconPreferencesChanged")
+    static let iconPreferencesChanged     = Notification.Name("iconPreferencesChanged")
     static let settingsWindowDidBecomeKey = Notification.Name("settingsWindowDidBecomeKey")
+    static let locationAuthorizationChanged = Notification.Name("locationAuthorizationChanged")
 }

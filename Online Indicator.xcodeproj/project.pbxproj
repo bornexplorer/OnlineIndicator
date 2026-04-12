@@ -272,6 +272,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = "Online Indicator";
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "Online Indicator/Online Indicator.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -290,15 +291,17 @@
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Online-Indicator-Info.plist";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSLocationUsageDescription = "Online Indicator uses your location solely to read the name of your connected Wi-Fi network. Your location is never stored or shared.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.6;
-				MARKETING_VERSION = 1.3;
+				MARKETING_VERSION = 1.3.1;
 				PRODUCT_BUNDLE_IDENTIFIER = "in.bornexplorer.Online-Indicator";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -316,6 +319,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = "Online Indicator";
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "Online Indicator/Online Indicator.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -334,15 +338,17 @@
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Online-Indicator-Info.plist";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSLocationUsageDescription = "Online Indicator uses your location solely to read the name of your connected Wi-Fi network. Your location is never stored or shared.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.6;
-				MARKETING_VERSION = 1.3;
+				MARKETING_VERSION = 1.3.1;
 				PRODUCT_BUNDLE_IDENTIFIER = "in.bornexplorer.Online-Indicator";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;

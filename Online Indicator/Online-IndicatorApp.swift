@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import CoreWLAN
+import CoreLocation
 
 @main
 struct OnlineIndicatorApp: App {
@@ -22,6 +23,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
 
     private var wifiToggleView:       MenuWiFiToggleView?
     private var networkSectionHeader: NSMenuItem?
+    private var wifiNameMenuItem:     NSMenuItem?
     private var ipv4MenuItem:         NSMenuItem?
     private var ipv6MenuItem:         NSMenuItem?
     private var mainMenu:             NSMenu?
@@ -33,14 +35,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
     private var hasInitialized        = false
     private var lastWiFiPowerChangeDate: Date?
     private var lastKnownSSID: String?
-    private var appInitiatedWiFiToggle = false
-    private var activePopover: NSPopover?
+    private var appInitiatedWiFiToggle  = false
+    private var popoverManager: PopoverManager!
+    private var pendingWifiNameInMenuEnable = false
     private var wifiPowerDebounce: Timer?
     private var ssidDebounce:      Timer?
 
     // MARK: - Lifecycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        _ = SSIDManager.shared   // ensure CLLocationManager is created on the main thread
+
         UserDefaults.standard.register(defaults: [
             "leftRightClickEnabled": true,
             "leftClickAction":       "wifi",
@@ -48,7 +53,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
             "leftRightClickSwapped": false,
             "hideIPv4":              false,
             "hideIPv6":              false,
-            "useSSIDAsMenuBarLabel": false
+            "useSSIDAsMenuBarLabel": false,
+            "showWifiNameInMenu":    false
         ])
 
         if UserDefaults.standard.object(forKey: "refreshInterval") == nil {
@@ -61,8 +67,38 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
     private func startApp() {
         setupStatusItem()
 
-        fetchSSIDFromAirport { [weak self] ssid in
-            self?.lastKnownSSID = ssid
+        // Seed lastKnownSSID immediately if location is already authorized;
+        // otherwise fall back to the airport tool which may still work on some systems.
+        if let ssid = SSIDManager.shared.currentSSID() {
+            lastKnownSSID = ssid
+        } else {
+            fetchSSIDFromAirport { [weak self] ssid in
+                self?.lastKnownSSID = ssid
+            }
+        }
+
+        // When location auth changes, refresh the SSID and update icon/menu if needed.
+        // If auth is revoked, fall back to the airport CLI so the name stays visible.
+        SSIDManager.shared.onAuthorizationChange = { [weak self] authorized in
+            guard let self else { return }
+            if authorized {
+                self.lastKnownSSID = SSIDManager.shared.currentSSID() ?? self.lastKnownSSID
+                // If the user just granted permission via the menu "Enable Wi-Fi Name" action,
+                // commit the showWifiNameInMenu preference now.
+                if self.pendingWifiNameInMenuEnable {
+                    self.pendingWifiNameInMenuEnable = false
+                    UserDefaults.standard.set(true, forKey: "showWifiNameInMenu")
+                }
+            } else {
+                // Location turned off — airport can still read SSID on many macOS versions
+                self.fetchSSIDFromAirport { [weak self] ssid in
+                    guard let self else { return }
+                    if let ssid { self.lastKnownSSID = ssid }
+                }
+            }
+            if UserDefaults.standard.bool(forKey: "useSSIDAsMenuBarLabel") {
+                self.updateIcon(for: self.currentStatus)
+            }
         }
 
         AppState.shared.statusUpdateHandler = { [weak self] status in
@@ -74,11 +110,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
 
             if UserDefaults.standard.bool(forKey: "useSSIDAsMenuBarLabel"),
                status == .connected || status == .blocked {
-                self.fetchSSIDFromAirport { [weak self] ssid in
-                    guard let self else { return }
-                    if let ssid, ssid != self.lastKnownSSID {
+                if let ssid = SSIDManager.shared.currentSSID() {
+                    if ssid != self.lastKnownSSID {
                         self.lastKnownSSID = ssid
                         self.updateIcon(for: self.currentStatus)
+                    }
+                } else {
+                    self.fetchSSIDFromAirport { [weak self] ssid in
+                        guard let self else { return }
+                        if let ssid, ssid != self.lastKnownSSID {
+                            self.lastKnownSSID = ssid
+                            self.updateIcon(for: self.currentStatus)
+                        }
                     }
                 }
             }
@@ -91,12 +134,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
 
             guard status != previous else { return }
 
-            self.showConnectionStatusNotification(status)
+            self.popoverManager.showConnectionStatus(status)
         }
 
         AppState.shared.checkNowResultHandler = { [weak self] status in
             guard let self else { return }
-            self.showConnectionStatusNotification(status)
+            self.popoverManager.showConnectionStatus(status)
         }
 
         AppState.shared.start()
@@ -108,7 +151,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
         }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            self.showLaunchTooltip()
+            self.popoverManager.showLaunchTooltip()
         }
 
         NotificationCenter.default.addObserver(
@@ -116,10 +159,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
         ) { [weak self] _ in
             guard let self else { return }
             if UserDefaults.standard.bool(forKey: "useSSIDAsMenuBarLabel") {
-                self.fetchSSIDFromAirport { [weak self] ssid in
-                    guard let self else { return }
-                    if let ssid { self.lastKnownSSID = ssid }
+                let ssid = SSIDManager.shared.currentSSID()
+                if let ssid {
+                    self.lastKnownSSID = ssid
                     self.updateIcon(for: self.currentStatus)
+                } else {
+                    self.fetchSSIDFromAirport { [weak self] ssid in
+                        guard let self else { return }
+                        if let ssid { self.lastKnownSSID = ssid }
+                        self.updateIcon(for: self.currentStatus)
+                    }
                 }
             } else {
                 self.updateIcon(for: self.currentStatus)
@@ -146,10 +195,38 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
 
         let hideIPv4 = UserDefaults.standard.bool(forKey: "hideIPv4")
         let hideIPv6 = UserDefaults.standard.bool(forKey: "hideIPv6")
+        let showWifiName = UserDefaults.standard.bool(forKey: "showWifiNameInMenu")
+
+        // Wi-Fi name row — always shown.
+        // Feature ON + ssid found  → white label value, non-interactive.
+        // Feature ON + ssid nil    → "Requires Location Access" in accent, tappable (same action as Enable).
+        // Feature OFF              → "Enable Wi-Fi Name" in accent, tappable.
+        networkSectionHeader?.isHidden = false
+        if showWifiName {
+            let ssid = SSIDManager.shared.currentSSID() ?? lastKnownSSID
+            if let ssid {
+                // Keep isEnabled = true with a no-op action so AppKit does NOT
+                // dim the attributed title. action = nil forces dimming regardless
+                // of isEnabled, which is why the text wasn't appearing white.
+                wifiNameMenuItem?.action    = #selector(wifiNameDisplayTapped)
+                wifiNameMenuItem?.target    = self
+                wifiNameMenuItem?.isEnabled = true
+                wifiNameMenuItem?.attributedTitle = wifiNameAttributedString(ssid: ssid)
+            } else {
+                wifiNameMenuItem?.action    = #selector(enableWifiNameFromMenu)
+                wifiNameMenuItem?.target    = self
+                wifiNameMenuItem?.isEnabled = true
+                wifiNameMenuItem?.attributedTitle = wifiNameUnavailableAttributedString()
+            }
+        } else {
+            wifiNameMenuItem?.action    = #selector(enableWifiNameFromMenu)
+            wifiNameMenuItem?.target    = self
+            wifiNameMenuItem?.isEnabled = true
+            wifiNameMenuItem?.attributedTitle = enableWifiNameAttributedString()
+        }
 
         ipv4MenuItem?.isHidden = hideIPv4
         ipv6MenuItem?.isHidden = hideIPv6
-        networkSectionHeader?.isHidden = hideIPv4 && hideIPv6
 
         if !hideIPv4 {
             ipv4MenuItem?.attributedTitle = ipAttributedString(
@@ -165,6 +242,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
 
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        popoverManager = PopoverManager { [weak self] in self?.statusItem.button }
         updateIcon(for: .noNetwork)
 
         let menu = NSMenu()
@@ -188,6 +266,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
         let networkHeader = sectionHeaderItem(title: "Network")
         networkSectionHeader = networkHeader
         menu.addItem(networkHeader)
+
+        let wifiNameItem = NSMenuItem(title: "", action: #selector(enableWifiNameFromMenu), keyEquivalent: "")
+        wifiNameItem.target = self
+        wifiNameItem.isEnabled = true
+        wifiNameMenuItem = wifiNameItem
+        menu.addItem(wifiNameItem)
 
         let ipv4Item = NSMenuItem(title: "", action: #selector(copyIPv4), keyEquivalent: "")
         ipv4Item.target = self
@@ -303,16 +387,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
         guard let iface = wifiInterface else { return }
         let turningOn = !iface.powerOn()
         appInitiatedWiFiToggle = true
-        showPersistentTextNotification(turningOn ? "Turning On Wi-Fi…" : "Turning Off Wi-Fi…")
+        popoverManager.showWiFiToggling(turningOn: turningOn)
         do { try iface.setPower(turningOn) }
         catch {
             appInitiatedWiFiToggle = false
-            dismissActivePopover()
+            popoverManager.dismiss()
         }
     }
 
     @objc private func openWiFiSettingsFromMenu() {
-        showTextNotification("Opening Wi-Fi Settings")
+        popoverManager.showOpeningWiFiSettings()
         openWiFiSettings()
     }
 
@@ -339,10 +423,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
     private func performAction(_ action: String) {
         switch action {
         case "wifi":
-            showTextNotification("Opening Wi-Fi Settings")
+            popoverManager.showOpeningWiFiSettings()
             openWiFiSettings()
         case "checkNow":
-            showCheckingNotification()
+            popoverManager.showChecking()
             AppState.shared.checkNow()
         case "wifiToggle":
             performWiFiToggle()
@@ -365,49 +449,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
         }
     }
 
-    // MARK: - Popover notifications
-
-    private func showTextNotification(_ text: String, autoDismissAfter delay: Double = 1.5) {
-        let content = Text(text)
-            .font(.system(size: 13))
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-        showStatusPopover(content: content, autoDismissAfter: delay)
-    }
-
-    private func showPersistentTextNotification(_ text: String) {
-        showTextNotification(text, autoDismissAfter: 0)
-    }
-
-    private func dismissActivePopover() {
-        activePopover?.performClose(nil)
-        activePopover = nil
-    }
-
-    // Shows a "Checking…" spinner popover and remains visible until the
-    // status update handler replaces it with the actual connection result.
-    private func showCheckingNotification() {
-        let content = HStack(spacing: 8) {
-            ProgressView()
-                .controlSize(.small)
-                .scaleEffect(0.85)
-            Text("Checking…")
-                .font(.system(size: 13))
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        showStatusPopover(content: content, autoDismissAfter: 0)
-    }
-
-    private func showConnectionStatusNotification(_ status: AppState.ConnectionStatus) {
-        let text: String = switch status {
-        case .connected: "Connected"
-        case .blocked:   "Connection Blocked"
-        case .noNetwork: "No Network"
-        }
-        showTextNotification(text)
-    }
-
     // MARK: - IP attributed string
 
     private func ipAttributedString(label: String, value: String, available: Bool) -> NSAttributedString {
@@ -426,65 +467,98 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
         return result
     }
 
+    // Wi-Fi name shown when the feature is enabled — value colour and weight match IPv4/IPv6.
+    // "Wi-Fi  " is 7 monospaced chars, same width as "IPv4   " / "IPv6   ", so values start at the same x.
+    private func wifiNameAttributedString(ssid: String) -> NSAttributedString {
+        let s = NSMutableAttributedString()
+        s.append(NSAttributedString(string: "Wi-Fi  ", attributes: [
+            .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .semibold),
+            .foregroundColor: NSColor.tertiaryLabelColor
+        ]))
+        s.append(NSAttributedString(string: ssid, attributes: [
+            .font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular),
+            .foregroundColor: NSColor.labelColor
+        ]))
+        return s
+    }
+
+    // Shown when showWifiNameInMenu is ON but no SSID is available (location not granted,
+    // or Wi-Fi off). Styled as the label column + tappable accent-colour value so the user
+    // knows they can click it to grant access or troubleshoot.
+    private func wifiNameUnavailableAttributedString() -> NSAttributedString {
+        let s = NSMutableAttributedString()
+        s.append(NSAttributedString(string: "Wi-Fi  ", attributes: [
+            .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .semibold),
+            .foregroundColor: NSColor.tertiaryLabelColor
+        ]))
+        s.append(NSAttributedString(string: "Requires Location Access", attributes: [
+            .font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular),
+            .foregroundColor: NSColor.controlAccentColor
+        ]))
+        return s
+    }
+
+    // Shown when the feature is disabled — accent-coloured, acts as a prompt to enable.
+    private func enableWifiNameAttributedString() -> NSAttributedString {
+        NSAttributedString(string: "Enable Wi-Fi Name", attributes: [
+            .font: NSFont.menuFont(ofSize: 13),
+            .foregroundColor: NSColor.controlAccentColor
+        ])
+    }
+
+    // No-op target for the Wi-Fi name display row when an SSID is shown.
+    // An NSMenuItem with action = nil is dimmed by AppKit regardless of isEnabled;
+    // assigning any selector keeps the item at full brightness without any click behavior.
+    @objc private func wifiNameDisplayTapped() {}
+
+    // Called when the user clicks "Enable Wi-Fi Name" in the menu.
+    @objc private func enableWifiNameFromMenu() {
+        mainMenu?.cancelTracking()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            guard let self else { return }
+            switch SSIDManager.shared.authorizationStatus {
+            case .authorizedAlways:
+                UserDefaults.standard.set(true, forKey: "showWifiNameInMenu")
+                self.lastKnownSSID = SSIDManager.shared.currentSSID() ?? self.lastKnownSSID
+            case .notDetermined:
+                let alert = NSAlert()
+                alert.messageText     = "Location Access Needed"
+                alert.informativeText = "To read your Wi-Fi network name, \(AppInfo.appName) needs Location Services access. Your location is never stored or shared — macOS requires it solely to identify which network you're connected to."
+                alert.addButton(withTitle: "Allow Access")
+                alert.addButton(withTitle: "Not Now")
+                alert.alertStyle = .informational
+                if alert.runModal() == .alertFirstButtonReturn {
+                    self.pendingWifiNameInMenuEnable = true
+                    SSIDManager.shared.requestAuthorization()
+                }
+            default:
+                let alert = NSAlert()
+                alert.messageText     = "Location Services Disabled"
+                alert.informativeText = "Location Services are currently disabled. Enable them in System Settings → Privacy & Security → Location Services to show your Wi-Fi name."
+                alert.addButton(withTitle: "Open Privacy Settings")
+                alert.addButton(withTitle: "Not Now")
+                if alert.runModal() == .alertFirstButtonReturn,
+                   let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices") {
+                    NSWorkspace.shared.open(url)
+                }
+            }
+        }
+    }
+
     // MARK: - Copy actions
 
     @objc private func copyIPv4() {
         guard let ip = lastIPv4 else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(ip, forType: .string)
-        showCopiedTooltip(text: "IPv4 Copied")
+        popoverManager.showCopied("IPv4 Copied")
     }
 
     @objc private func copyIPv6() {
         guard let ip = lastIPv6 else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(ip, forType: .string)
-        showCopiedTooltip(text: "IPv6 Copied")
-    }
-
-    // MARK: - Popover helper
-
-    private func showStatusPopover<Content: View>(content: Content, autoDismissAfter delay: Double) {
-        guard let button = statusItem.button else { return }
-
-        activePopover?.performClose(nil)
-        activePopover = nil
-
-        let hostingView = NSHostingView(rootView: content)
-        let size = hostingView.fittingSize
-        hostingView.frame = NSRect(origin: .zero, size: size)
-
-        let controller = NSViewController()
-        controller.view = hostingView
-
-        let popover = NSPopover()
-        popover.behavior = .transient
-        popover.animates = true
-        popover.contentSize = size
-        popover.contentViewController = controller
-
-        let anchor = NSRect(x: button.bounds.midX - 1, y: 0,
-                            width: 2, height: button.bounds.height)
-        popover.show(relativeTo: anchor, of: button, preferredEdge: .minY)
-
-        activePopover = popover
-
-        if delay > 0 {
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self, weak popover] in
-                popover?.performClose(nil)
-                if self?.activePopover === popover { self?.activePopover = nil }
-            }
-        }
-    }
-
-    private func showCopiedTooltip(text: String) {
-        let content = HStack(spacing: 6) {
-            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-            Text(text).font(.system(size: 13))
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        showStatusPopover(content: content, autoDismissAfter: 1.5)
+        popoverManager.showCopied("IPv6 Copied")
     }
 
     // MARK: - Onboarding
@@ -543,7 +617,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
         var showLabel = pref.menuLabelEnabled && !rawLabel.isEmpty
 
         if useSSIDLabel && (status == .connected || status == .blocked) {
-            let ssid = lastKnownSSID ?? ""
+            let ssid = SSIDManager.shared.currentSSID() ?? lastKnownSSID ?? ""
             if !ssid.isEmpty {
                 rawLabel  = String(ssid.prefix(15))
                 showLabel = true
@@ -612,12 +686,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    // MARK: - Launch tooltip
-
-    private func showLaunchTooltip() {
-        showTextNotification("\(AppInfo.appName) is running", autoDismissAfter: 2.0)
-    }
-
     @objc private func quitApp() {
         NSApplication.shared.terminate(nil)
     }
@@ -643,13 +711,10 @@ extension AppDelegate: CWEventDelegate {
                 if !isOn { self.lastKnownSSID = nil }
 
                 if self.appInitiatedWiFiToggle {
-                    // Wait for AppState to deliver the updated connection status,
-                    // which will update the icon and then show the result popover.
-                    // Do not show "Online" / "Offline" here — let the status handler do it.
                     self.appInitiatedWiFiToggle = false
-                    self.dismissActivePopover()
+                    self.popoverManager.dismiss()
                 } else {
-                    self.showTextNotification(isOn ? "Wi-Fi On" : "Wi-Fi Off")
+                    self.popoverManager.showWiFiPowerChanged(isOn: isOn)
                 }
 
                 self.updateWiFiToggleView()
@@ -668,10 +733,16 @@ extension AppDelegate: CWEventDelegate {
             ) { [weak self] _ in
                 guard let self, let iface = self.wifiInterface else { return }
 
-                self.fetchSSIDFromAirport { [weak self] ssid in
+                self.fetchSSIDFromAirport { [weak self] airportSSID in
                     guard let self else { return }
 
+                    let ssid = SSIDManager.shared.currentSSID() ?? airportSSID
+
                     if let ssid {
+                        // Only show "Switched to" when the SSID actually changed to a different name.
+                        if let previous = self.lastKnownSSID, previous != ssid {
+                            self.popoverManager.showNetworkSwitched(to: ssid)
+                        }
                         self.lastKnownSSID = ssid
                         self.updateIcon(for: self.currentStatus)
                         return
@@ -683,7 +754,7 @@ extension AppDelegate: CWEventDelegate {
                        Date().timeIntervalSince(pwDate) < 4.0 { return }
 
                     self.lastKnownSSID = nil
-                    self.showTextNotification("No Network")
+                    self.popoverManager.showNoNetwork()
                 }
             }
         }
@@ -816,4 +887,55 @@ private class MenuAppInfoView: NSView {
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+// MARK: - SSID Manager
+//
+// Owns the CLLocationManager and exposes a synchronous currentSSID() that works
+// once the user has granted Location Services access (required on macOS 10.15+
+// for any API that reads the connected Wi-Fi network name).
+
+final class SSIDManager: NSObject, CLLocationManagerDelegate {
+
+    static let shared = SSIDManager()
+
+    private let locationManager = CLLocationManager()
+
+    /// Called on the main thread whenever the authorization status changes.
+    var onAuthorizationChange: ((Bool) -> Void)?
+
+    private(set) var authorizationStatus: CLAuthorizationStatus = .notDetermined
+
+    var isAuthorized: Bool {
+        authorizationStatus == .authorizedAlways
+    }
+
+    private override init() {
+        super.init()
+        locationManager.delegate = self
+        authorizationStatus = locationManager.authorizationStatus
+    }
+
+    /// Presents the macOS Location Services permission dialog.
+    /// Requires NSLocationUsageDescription in Info.plist AND
+    /// com.apple.security.personal-information.location in the .entitlements file.
+    func requestAuthorization() {
+        locationManager.requestAlwaysAuthorization()
+    }
+
+    /// Returns the current SSID synchronously when Location Services are authorized,
+    /// nil otherwise (caller should fall back to the airport CLI tool).
+    func currentSSID() -> String? {
+        guard isAuthorized else { return nil }
+        return CWWiFiClient.shared().interface()?.ssid()
+    }
+
+    // MARK: CLLocationManagerDelegate
+
+    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        // Called on the main thread per Apple documentation.
+        authorizationStatus = manager.authorizationStatus
+        NotificationCenter.default.post(name: .locationAuthorizationChanged, object: nil)
+        onAuthorizationChange?(isAuthorized)
+    }
 }

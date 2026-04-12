@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import CoreLocation
 
 struct SettingsView: View {
 
@@ -23,6 +24,17 @@ struct SettingsView: View {
 
     @State private var hideIPv4 = false
     @State private var hideIPv6 = false
+
+    // SSID / Wi-Fi name feature
+    @State private var showWifiNameInMenu    = false
+    @State private var useSSIDAsMenuBarLabel = false
+
+    // Alert sequencing for the SSID features
+    private enum SSIDFeature { case menuItem, menuBarLabel }
+    @State private var ssidFeaturePendingAuth:    SSIDFeature? = nil
+    @State private var showLocationAlert          = false
+    @State private var showLocationDeniedAlert    = false
+    @State private var showOverrideAlert          = false
 
     enum UpdateStatus: Equatable {
         case idle
@@ -157,6 +169,8 @@ struct SettingsView: View {
             leftRightClickSwapped = UserDefaults.standard.bool(forKey: "leftRightClickSwapped")
             hideIPv4              = UserDefaults.standard.bool(forKey: "hideIPv4")
             hideIPv6              = UserDefaults.standard.bool(forKey: "hideIPv6")
+            showWifiNameInMenu    = UserDefaults.standard.bool(forKey: "showWifiNameInMenu")
+            useSSIDAsMenuBarLabel = UserDefaults.standard.bool(forKey: "useSSIDAsMenuBarLabel")
         }
         .onReceive(NotificationCenter.default.publisher(for: .settingsWindowDidBecomeKey)) { _ in
             isLaunchEnabled       = LoginItemManager.shared.isEnabled()
@@ -169,6 +183,55 @@ struct SettingsView: View {
             leftRightClickSwapped = UserDefaults.standard.bool(forKey: "leftRightClickSwapped")
             hideIPv4              = UserDefaults.standard.bool(forKey: "hideIPv4")
             hideIPv6              = UserDefaults.standard.bool(forKey: "hideIPv6")
+            showWifiNameInMenu    = UserDefaults.standard.bool(forKey: "showWifiNameInMenu")
+            useSSIDAsMenuBarLabel = UserDefaults.standard.bool(forKey: "useSSIDAsMenuBarLabel")
+        }
+        // After the user dismisses the system Location Services dialog, continue
+        // with whichever SSID feature was waiting for authorization.
+        .onReceive(NotificationCenter.default.publisher(for: .locationAuthorizationChanged)) { _ in
+            guard SSIDManager.shared.isAuthorized,
+                  let pending = ssidFeaturePendingAuth else { return }
+            ssidFeaturePendingAuth = nil
+            switch pending {
+            case .menuItem:
+                commitWifiNameInMenu(true)
+            case .menuBarLabel:
+                // Show the override warning before actually enabling
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    showOverrideAlert = true
+                }
+            }
+        }
+        // Location Services pre-explanation alert
+        .alert("Location Access Needed", isPresented: $showLocationAlert) {
+            Button("Allow Access") {
+                SSIDManager.shared.requestAuthorization()
+            }
+            Button("Not Now", role: .cancel) {
+                ssidFeaturePendingAuth = nil
+            }
+        } message: {
+            Text("To read your Wi-Fi network name, \(AppInfo.appName) needs Location Services access. Your location is never stored or shared — macOS requires it solely to identify which network you're connected to.")
+        }
+        // Location Services is disabled at the app or system level — open Settings
+        .alert("Location Services Disabled", isPresented: $showLocationDeniedAlert) {
+            Button("Open Privacy Settings") {
+                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices") {
+                    NSWorkspace.shared.open(url)
+                }
+            }
+            Button("Not Now", role: .cancel) {
+                ssidFeaturePendingAuth = nil
+            }
+        } message: {
+            Text("Location Services are currently disabled for \(AppInfo.appName) or for this Mac. To enable the Wi-Fi name feature, turn on Location Services in System Settings → Privacy & Security → Location Services.")
+        }
+        // Override-warning alert (shown before enabling "Use Wi-Fi Name as Menu Bar Label")
+        .alert("Override Menu Bar Labels?", isPresented: $showOverrideAlert) {
+            Button("Enable") { commitWifiNameAsLabel(true) }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Your Wi-Fi network name will replace the custom menu bar label for the Connected and Blocked states. Your custom labels are preserved and restored if you turn this off.")
         }
     }
 
@@ -352,6 +415,17 @@ struct SettingsView: View {
 
                     Divider().padding(.leading, 56)
 
+                    SettingsRow(icon: "wifi", iconColor: .blue,
+                                title: "Show Wi-Fi Name in Menu",
+                                subtitle: "Display the connected network name in the dropdown menu") {
+                        Toggle("", isOn: Binding(
+                            get: { showWifiNameInMenu },
+                            set: { handleShowWifiNameInMenuToggle($0) }
+                        )).labelsHidden()
+                    }
+
+                    Divider().padding(.leading, 56)
+
                     SettingsRow(icon: "eye.slash", iconColor: .gray,
                                 title: "Hide IPv4",
                                 subtitle: "Remove IPv4 address from the menu") {
@@ -431,10 +505,23 @@ struct SettingsView: View {
             VStack(spacing: 24) {
                 SettingsSection(title: "Appearance") {
                     VStack(spacing: 0) {
+
+                        SettingsRow(icon: "wifi", iconColor: .purple,
+                                    title: "Use Wi-Fi Name as Menu Bar Label",
+                                    subtitle: "Overrides the Connected & Blocked label with your network name") {
+                            Toggle("", isOn: Binding(
+                                get: { useSSIDAsMenuBarLabel },
+                                set: { handleUseSSIDAsMenuBarLabelToggle($0) }
+                            )).labelsHidden()
+                        }
+
+                        Divider().padding(.leading, 14)
+
                         IconSlotRow(label: "Connected",
                                     statusDescription: "Internet access is available and this Mac is online",
                                     defaultSlot: IconPreferences.defaultSlot(for: .connected),
                                     slot: $connectedSlot,
+                                    labelDisabled: useSSIDAsMenuBarLabel,
                                     onChange: { onSlotChanged(); IconPreferences.save(connectedSlot, for: .connected) },
                                     onReset: {
                                         connectedSlot = IconPreferences.defaultSlot(for: .connected)
@@ -445,6 +532,7 @@ struct SettingsView: View {
                                     statusDescription: "Connected, but no internet (e.g. captive network)",
                                     defaultSlot: IconPreferences.defaultSlot(for: .blocked),
                                     slot: $blockedSlot,
+                                    labelDisabled: useSSIDAsMenuBarLabel,
                                     onChange: { onSlotChanged(); IconPreferences.save(blockedSlot, for: .blocked) },
                                     onReset: {
                                         blockedSlot = IconPreferences.defaultSlot(for: .blocked)
@@ -646,6 +734,64 @@ struct SettingsView: View {
         }
     }
 
+    // MARK: - SSID feature handlers
+
+    private func handleShowWifiNameInMenuToggle(_ enabled: Bool) {
+        if enabled {
+            switch SSIDManager.shared.authorizationStatus {
+            case .authorizedAlways:
+                commitWifiNameInMenu(true)
+            case .notDetermined:
+                showWifiNameInMenu = false
+                ssidFeaturePendingAuth = .menuItem
+                showLocationAlert = true
+            default:
+                // .denied / .restricted — system-level or app-level location is off
+                showWifiNameInMenu = false
+                ssidFeaturePendingAuth = .menuItem
+                showLocationDeniedAlert = true
+            }
+        } else {
+            commitWifiNameInMenu(false)
+        }
+    }
+
+    private func handleUseSSIDAsMenuBarLabelToggle(_ enabled: Bool) {
+        if enabled {
+            switch SSIDManager.shared.authorizationStatus {
+            case .authorizedAlways:
+                // Authorized — show override warning before committing.
+                // Setting useSSIDAsMenuBarLabel = false here goes directly to @State,
+                // not through the Binding.set, so it does NOT re-trigger this handler.
+                useSSIDAsMenuBarLabel = false
+                showOverrideAlert = true
+            case .notDetermined:
+                useSSIDAsMenuBarLabel = false
+                ssidFeaturePendingAuth = .menuBarLabel
+                showLocationAlert = true
+            default:
+                useSSIDAsMenuBarLabel = false
+                ssidFeaturePendingAuth = .menuBarLabel
+                showLocationDeniedAlert = true
+            }
+        } else {
+            commitWifiNameAsLabel(false)
+        }
+    }
+
+    private func commitWifiNameInMenu(_ enabled: Bool) {
+        showWifiNameInMenu = enabled
+        UserDefaults.standard.set(enabled, forKey: "showWifiNameInMenu")
+    }
+
+    private func commitWifiNameAsLabel(_ enabled: Bool) {
+        // Assigns directly to @State — does NOT go through the Toggle's Binding.set,
+        // so handleUseSSIDAsMenuBarLabelToggle is NOT re-triggered.
+        useSSIDAsMenuBarLabel = enabled
+        UserDefaults.standard.set(enabled, forKey: "useSSIDAsMenuBarLabel")
+        NotificationCenter.default.post(name: .iconPreferencesChanged, object: nil)
+    }
+
     private func checkForUpdates() {
         withAnimation { updateStatus = .checking }
         UpdateChecker.check { result in
@@ -776,6 +922,7 @@ private struct IconSlotRow: View {
     let statusDescription: String
     let defaultSlot: IconPreferences.Slot
     @Binding var slot: IconPreferences.Slot
+    var labelDisabled: Bool = false
     let onChange: () -> Void
     let onReset:  () -> Void
 
@@ -841,7 +988,7 @@ private struct IconSlotRow: View {
                                 .foregroundStyle(slot.menuLabelEnabled ? Color.accentColor : Color.primary.opacity(0.28))
                                 .animation(.easeInOut(duration: 0.15), value: slot.menuLabelEnabled)
                         }
-                        TextField("optional label", text: Binding(
+                        TextField(labelDisabled ? "Set by Wi-Fi name" : "optional label", text: Binding(
                             get: { slot.menuLabel },
                             set: {
                                 slot.menuLabel = String($0.prefix(15))
@@ -851,6 +998,8 @@ private struct IconSlotRow: View {
                             }
                         ))
                         .textFieldStyle(.roundedBorder).font(.system(size: 12)).frame(height: 28)
+                        .disabled(labelDisabled)
+                        .opacity(labelDisabled ? 0.4 : 1)
                     }.frame(maxWidth: .infinity)
 
                     VStack(alignment: .center, spacing: 4) {
