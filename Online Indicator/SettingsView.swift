@@ -25,16 +25,16 @@ struct SettingsView: View {
     @State private var hideIPv4 = false
     @State private var hideIPv6 = false
 
-    // SSID / Wi-Fi name feature
     @State private var showWifiNameInMenu    = false
     @State private var useSSIDAsMenuBarLabel = false
+    @State private var wifiNameInMenuSSID: String? = nil
+    @State private var isLocationAuthorized: Bool = SSIDManager.shared.isAuthorized
 
-    // Alert sequencing for the SSID features
     private enum SSIDFeature { case menuItem, menuBarLabel }
-    @State private var ssidFeaturePendingAuth:    SSIDFeature? = nil
-    @State private var showLocationAlert          = false
-    @State private var showLocationDeniedAlert    = false
-    @State private var showOverrideAlert          = false
+    @State private var ssidFeaturePendingAuth: SSIDFeature? = nil
+    @State private var showLocationAlert       = false
+    @State private var showLocationDeniedAlert = false
+    @State private var showOverrideAlert       = false
 
     enum UpdateStatus: Equatable {
         case idle
@@ -56,10 +56,16 @@ struct SettingsView: View {
     @State private var suppressSaveButton       = false
     @State private var showSetSavedConfirmation = false
 
+    @State private var wifiToggleShortcut:   KeyboardShortcut? = KeyboardShortcutManager.shared.shortcut(for: KeyboardShortcutManager.wifiToggleKey)
+    @State private var wifiSettingsShortcut: KeyboardShortcut? = KeyboardShortcutManager.shared.shortcut(for: KeyboardShortcutManager.wifiSettingsKey)
+    @State private var vpnSettingsShortcut:  KeyboardShortcut? = KeyboardShortcutManager.shared.shortcut(for: KeyboardShortcutManager.vpnSettingsKey)
+
     private let leftClickOptions: [(label: String, tag: String)] = [
-        ("Open Wi-Fi Settings",   "wifi"),
-        ("Check Connection Now",  "checkNow"),
-        ("Toggle Wi-Fi On / Off", "wifiToggle")
+        ("None",                         "none"),
+        ("Open Wi-Fi Settings",          "wifi"),
+        ("Open Network Settings",        "vpnSettings"),
+        ("Check Connection Now",         "checkNow"),
+        ("Toggle Wi-Fi On / Off",        "wifiToggle")
     ]
 
     private let rightClickOptions: [(label: String, tag: String)] = [
@@ -122,7 +128,8 @@ struct SettingsView: View {
             HStack(spacing: 2) {
                 TabBarButton(title: "General",    systemImage: "gearshape.fill",   tag: 0, selected: $selectedTab)
                 TabBarButton(title: "Appearance", systemImage: "paintbrush.fill",  tag: 1, selected: $selectedTab)
-                TabBarButton(title: "About",      systemImage: "info.circle.fill", tag: 2, selected: $selectedTab)
+                TabBarButton(title: "Shortcuts",  systemImage: "keyboard",         tag: 2, selected: $selectedTab)
+                TabBarButton(title: "About",      systemImage: "info.circle.fill", tag: 3, selected: $selectedTab)
             }
             .padding(3)
             .background(Color(.quaternarySystemFill))
@@ -137,6 +144,7 @@ struct SettingsView: View {
             Group {
                 if selectedTab == 0 { generalTab }
                 else if selectedTab == 1 { appearanceTab }
+                else if selectedTab == 2 { keyboardShortcutsTab }
                 else { aboutTab }
             }
             .animation(.easeInOut(duration: 0.18), value: selectedTab)
@@ -171,6 +179,11 @@ struct SettingsView: View {
             hideIPv6              = UserDefaults.standard.bool(forKey: "hideIPv6")
             showWifiNameInMenu    = UserDefaults.standard.bool(forKey: "showWifiNameInMenu")
             useSSIDAsMenuBarLabel = UserDefaults.standard.bool(forKey: "useSSIDAsMenuBarLabel")
+            wifiNameInMenuSSID    = SSIDManager.shared.currentSSID()
+            isLocationAuthorized  = SSIDManager.shared.isAuthorized
+            wifiToggleShortcut    = KeyboardShortcutManager.shared.shortcut(for: KeyboardShortcutManager.wifiToggleKey)
+            wifiSettingsShortcut  = KeyboardShortcutManager.shared.shortcut(for: KeyboardShortcutManager.wifiSettingsKey)
+            vpnSettingsShortcut   = KeyboardShortcutManager.shared.shortcut(for: KeyboardShortcutManager.vpnSettingsKey)
         }
         .onReceive(NotificationCenter.default.publisher(for: .settingsWindowDidBecomeKey)) { _ in
             isLaunchEnabled       = LoginItemManager.shared.isEnabled()
@@ -185,24 +198,35 @@ struct SettingsView: View {
             hideIPv6              = UserDefaults.standard.bool(forKey: "hideIPv6")
             showWifiNameInMenu    = UserDefaults.standard.bool(forKey: "showWifiNameInMenu")
             useSSIDAsMenuBarLabel = UserDefaults.standard.bool(forKey: "useSSIDAsMenuBarLabel")
+            wifiNameInMenuSSID    = SSIDManager.shared.currentSSID()
+            isLocationAuthorized  = SSIDManager.shared.isAuthorized
+            wifiToggleShortcut    = KeyboardShortcutManager.shared.shortcut(for: KeyboardShortcutManager.wifiToggleKey)
+            wifiSettingsShortcut  = KeyboardShortcutManager.shared.shortcut(for: KeyboardShortcutManager.wifiSettingsKey)
+            vpnSettingsShortcut   = KeyboardShortcutManager.shared.shortcut(for: KeyboardShortcutManager.vpnSettingsKey)
         }
-        // After the user dismisses the system Location Services dialog, continue
-        // with whichever SSID feature was waiting for authorization.
         .onReceive(NotificationCenter.default.publisher(for: .locationAuthorizationChanged)) { _ in
-            guard SSIDManager.shared.isAuthorized,
-                  let pending = ssidFeaturePendingAuth else { return }
+            let authorized = SSIDManager.shared.isAuthorized
+            isLocationAuthorized = authorized
+            if !authorized {
+                showWifiNameInMenu = false
+                wifiNameInMenuSSID = nil
+                if useSSIDAsMenuBarLabel {
+                    commitWifiNameAsLabel(false)
+                }
+            } else {
+                wifiNameInMenuSSID = SSIDManager.shared.currentSSID()
+            }
+            guard authorized, let pending = ssidFeaturePendingAuth else { return }
             ssidFeaturePendingAuth = nil
             switch pending {
             case .menuItem:
                 commitWifiNameInMenu(true)
             case .menuBarLabel:
-                // Show the override warning before actually enabling
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
                     showOverrideAlert = true
                 }
             }
         }
-        // Location Services pre-explanation alert
         .alert("Location Access Needed", isPresented: $showLocationAlert) {
             Button("Allow Access") {
                 SSIDManager.shared.requestAuthorization()
@@ -211,10 +235,9 @@ struct SettingsView: View {
                 ssidFeaturePendingAuth = nil
             }
         } message: {
-            Text("To read your Wi-Fi network name, \(AppInfo.appName) needs Location Services access. Your location is never stored or shared — macOS requires it solely to identify which network you're connected to.")
+            Text("To read your Wi-Fi network name, \(AppInfo.appName) needs Location Services access. \n\nYour location is never stored or shared. macOS only uses it to determine which Wi-Fi network you're connected to.")
         }
-        // Location Services is disabled at the app or system level — open Settings
-        .alert("Location Services Disabled", isPresented: $showLocationDeniedAlert) {
+        .alert("Location Access Disabled", isPresented: $showLocationDeniedAlert) {
             Button("Open Privacy Settings") {
                 if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices") {
                     NSWorkspace.shared.open(url)
@@ -224,9 +247,8 @@ struct SettingsView: View {
                 ssidFeaturePendingAuth = nil
             }
         } message: {
-            Text("Location Services are currently disabled for \(AppInfo.appName) or for this Mac. To enable the Wi-Fi name feature, turn on Location Services in System Settings → Privacy & Security → Location Services.")
+            Text("Location Services are currently disabled for \(AppInfo.appName) or for this Mac. macOS requires this to identify which Wi-Fi network you're connected to — your location is never stored or shared.\n\nEnable it in System Settings → Privacy & Security → Location Services.")
         }
-        // Override-warning alert (shown before enabling "Use Wi-Fi Name as Menu Bar Label")
         .alert("Override Menu Bar Labels?", isPresented: $showOverrideAlert) {
             Button("Enable") { commitWifiNameAsLabel(true) }
             Button("Cancel", role: .cancel) { }
@@ -284,69 +306,63 @@ struct SettingsView: View {
                 }
 
                 SettingsSection(title: "Monitoring") {
+
                     SettingsRow(icon: "clock.fill", iconColor: .orange,
                                 title: "Check Interval",
                                 subtitle: "How often the app checks if you're connected") {
-                        HStack(spacing: 8) {
-                            TextField("", text: $intervalText)
-                                .textFieldStyle(.roundedBorder).frame(width: 56).multilineTextAlignment(.trailing)
-                                .onChange(of: intervalText) { _, v in
-                                    let d = v.filter { $0.isNumber }
-                                    if d != v { intervalText = d }
-                                    if intervalInvalid { intervalInvalid = false }
-                                }
-                            Text("sec").foregroundStyle(.secondary).font(.system(size: 12))
-                            if intervalSaved {
-                                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).font(.system(size: 16))
-                                    .transition(.scale.combined(with: .opacity))
-                            } else {
-                                Button("Apply") { applyInterval() }.buttonStyle(.bordered).controlSize(.small)
-                                    .transition(.opacity.combined(with: .scale))
-                            }
-                        }
-                        .animation(.easeInOut(duration: 0.18), value: intervalSaved)
-                    }
-
-                    if intervalInvalid {
-                        HStack(spacing: 0) {
-                            Spacer().frame(width: 56)
-                            HStack(spacing: 4) {
-                                Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 9))
-                                Text("Minimum interval is 1 second").font(.system(size: 10))
-                            }
-                            .foregroundStyle(.red).transition(.opacity.combined(with: .move(edge: .top)))
-                            Spacer()
-                        }
-                        .padding(.bottom, 4).animation(.easeInOut(duration: 0.18), value: intervalInvalid)
+                        EmptyView()
                     }
 
                     HStack(spacing: 0) {
                         Spacer().frame(width: 56)
-                        HStack(spacing: 6) {
-                            ForEach([("30s", 30.0), ("1m", 60.0), ("2m", 120.0), ("5m", 300.0)], id: \.1) { lbl, val in
-                                Button {
-                                    withAnimation(.easeInOut(duration: 0.15)) {
-                                        interval = val; intervalText = formatInterval(val); intervalInvalid = false
+                        HStack(spacing: 8) {
+                            HStack(spacing: 6) {
+                                ForEach([("30s", 30.0), ("1m", 60.0), ("2m", 120.0), ("5m", 300.0)], id: \.1) { lbl, val in
+                                    Button {
+                                        withAnimation(.easeInOut(duration: 0.15)) {
+                                            interval = val; intervalText = formatInterval(val); intervalInvalid = false
+                                        }
+                                        UserDefaults.standard.set(val, forKey: "refreshInterval")
+                                        AppState.shared.restart()
+                                        withAnimation { intervalSaved = true }
+                                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                                            withAnimation { intervalSaved = false }
+                                        }
+                                    } label: {
+                                        Text(lbl).font(.system(size: 11, weight: .medium))
+                                            .padding(.horizontal, 10).padding(.vertical, 4)
+                                            .background(RoundedRectangle(cornerRadius: 6)
+                                                .fill(interval == val ? Color.accentColor.opacity(0.15) : Color.primary.opacity(0.07)))
+                                            .foregroundStyle(interval == val ? Color.accentColor : .secondary)
                                     }
-                                    UserDefaults.standard.set(val, forKey: "refreshInterval")
-                                    AppState.shared.restart()
-                                    withAnimation { intervalSaved = true }
-                                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                                        withAnimation { intervalSaved = false }
-                                    }
-                                } label: {
-                                    Text(lbl).font(.system(size: 11, weight: .medium))
-                                        .padding(.horizontal, 10).padding(.vertical, 4)
-                                        .background(RoundedRectangle(cornerRadius: 6)
-                                            .fill(interval == val ? Color.accentColor.opacity(0.15) : Color.primary.opacity(0.07)))
-                                        .foregroundStyle(interval == val ? Color.accentColor : .secondary)
+                                    .buttonStyle(.plain)
                                 }
-                                .buttonStyle(.plain)
                             }
+
+                            Spacer()
+
+                            HStack(spacing: 6) {
+                                TextField("", text: $intervalText)
+                                    .textFieldStyle(.roundedBorder).frame(width: 56).multilineTextAlignment(.trailing)
+                                    .onChange(of: intervalText) { _, v in
+                                        let d = v.filter { $0.isNumber }
+                                        if d != v { intervalText = d }
+                                        if intervalInvalid { intervalInvalid = false }
+                                    }
+                                Text("sec").foregroundStyle(.secondary).font(.system(size: 12))
+                                if intervalSaved {
+                                    Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).font(.system(size: 16))
+                                        .transition(.scale.combined(with: .opacity))
+                                } else {
+                                    Button("Apply") { applyInterval() }.buttonStyle(.bordered).controlSize(.small)
+                                        .transition(.opacity.combined(with: .scale))
+                                }
+                            }
+                            .animation(.easeInOut(duration: 0.18), value: intervalSaved)
                         }
-                        Spacer()
+                        .padding(.trailing, 14)
                     }
-                    .padding(.vertical, 10)
+                    .padding(.bottom, 10)
 
                     Divider().padding(.leading, 56)
 
@@ -392,7 +408,7 @@ struct SettingsView: View {
                     .padding(.bottom, 12)
                 }
 
-                SettingsSection(title: "Menu Bar") {
+                SettingsSection(title: "Icon & Menu Options") {
                     SettingsRow(icon: "cursorarrow.rays", iconColor: .red,
                                 title: "Click Actions",
                                 subtitle: "Assign actions to left and right click") {
@@ -408,7 +424,7 @@ struct SettingsView: View {
                         isSwapped:    $leftRightClickSwapped,
                         leftOptions:  leftClickOptions, rightOptions: rightClickOptions,
                         enabled:      leftRightClickEnabled,
-                        onLeftChanged:  { UserDefaults.standard.set(leftClickAction,       forKey: "leftClickAction") },
+                        onLeftChanged:  { UserDefaults.standard.set(leftClickAction, forKey: "leftClickAction") },
                         onRightChanged: { UserDefaults.standard.set(rightClickAction,      forKey: "rightClickAction") },
                         onSwapChanged:  { UserDefaults.standard.set(leftRightClickSwapped, forKey: "leftRightClickSwapped") }
                     )
@@ -416,37 +432,106 @@ struct SettingsView: View {
                     Divider().padding(.leading, 56)
 
                     SettingsRow(icon: "wifi", iconColor: .blue,
-                                title: "Show Wi-Fi Name in Menu",
-                                subtitle: "Display the connected network name in the dropdown menu") {
-                        Toggle("", isOn: Binding(
-                            get: { showWifiNameInMenu },
-                            set: { handleShowWifiNameInMenuToggle($0) }
-                        )).labelsHidden()
+                                title: "Network Name in Menu",
+                                subtitle: "Show your connected network name in the dropdown menu") {
+                        wifiNameInMenuControl
+                    }
+
+                    if showWifiNameInMenu {
+                        wifiNameSubsectionView
+                            .transition(.opacity.combined(with: .move(edge: .top)))
                     }
 
                     Divider().padding(.leading, 56)
 
                     SettingsRow(icon: "eye.slash", iconColor: .gray,
-                                title: "Hide IPv4",
-                                subtitle: "Remove IPv4 address from the menu") {
-                        Toggle("", isOn: $hideIPv4).labelsHidden()
-                            .onChange(of: hideIPv4) { _, v in UserDefaults.standard.set(v, forKey: "hideIPv4") }
+                                title: "Hide IP Addresses",
+                                subtitle: "Remove IP address rows from the dropdown menu") {
+                        EmptyView()
                     }
 
-                    Divider().padding(.leading, 56)
-
-                    SettingsRow(icon: "eye.slash", iconColor: .gray,
-                                title: "Hide IPv6",
-                                subtitle: "Remove IPv6 address from the menu") {
-                        Toggle("", isOn: $hideIPv6).labelsHidden()
-                            .onChange(of: hideIPv6) { _, v in UserDefaults.standard.set(v, forKey: "hideIPv6") }
-                    }
+                    IPHideBlock(
+                        hideIPv4: $hideIPv4,
+                        hideIPv6: $hideIPv6,
+                        onIPv4Changed: { UserDefaults.standard.set(hideIPv4, forKey: "hideIPv4") },
+                        onIPv6Changed: { UserDefaults.standard.set(hideIPv6, forKey: "hideIPv6") }
+                    )
                 }
             }
             .padding(20)
         }
         .scrollContentBackground(.hidden)
         .background(Color(.windowBackgroundColor))
+    }
+
+    // MARK: - Wi-Fi Name in Menu Control
+
+    @ViewBuilder
+    private var wifiNameInMenuControl: some View {
+        if showWifiNameInMenu {
+            Button("Disable") {
+                handleShowWifiNameInMenuToggle(false)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        } else {
+            Button("Enable") {
+                handleShowWifiNameInMenuToggle(true)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+    }
+
+    // MARK: - Wi-Fi Name Subsection
+
+    private var wifiNameSubsectionView: some View {
+        HStack(spacing: 10) {
+            if let ssid = wifiNameInMenuSSID {
+                Text(ssid)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer()
+                HStack(spacing: 4) {
+                    Circle()
+                        .fill(Color.green)
+                        .frame(width: 6, height: 6)
+                    Text("Accessible")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                Text("Network name unavailable")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if isLocationAuthorized {
+                    Button("Fetch") {
+                        wifiNameInMenuSSID = SSIDManager.shared.currentSSID()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                } else {
+                    Button("Grant Access") {
+                        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(Color(.windowBackgroundColor).opacity(0.45))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.primary.opacity(0.1), lineWidth: 1))
+        .padding(.leading, 56)
+        .padding(.trailing, 14)
+        .padding(.bottom, 12)
     }
 
     // MARK: - Update control
@@ -506,16 +591,24 @@ struct SettingsView: View {
                 SettingsSection(title: "Appearance") {
                     VStack(spacing: 0) {
 
-                        SettingsRow(icon: "wifi", iconColor: .purple,
-                                    title: "Use Wi-Fi Name as Menu Bar Label",
-                                    subtitle: "Overrides the Connected & Blocked label with your network name") {
+                        SettingsRow(icon: "character.cursor.ibeam", iconColor: .blue,
+                                    title: "Use Wi-Fi Name as Label",
+                                    subtitle: "Overrides the Connected & Blocked states label with your network name") {
                             Toggle("", isOn: Binding(
                                 get: { useSSIDAsMenuBarLabel },
                                 set: { handleUseSSIDAsMenuBarLabelToggle($0) }
                             )).labelsHidden()
                         }
+                        .opacity(showWifiNameInMenu ? 1 : 0)
+                        .frame(height: showWifiNameInMenu ? nil : 0)
+                        .clipped()
+                        .animation(.easeInOut(duration: 0.2), value: showWifiNameInMenu)
 
                         Divider().padding(.leading, 14)
+                            .opacity(showWifiNameInMenu ? 1 : 0)
+                            .frame(height: showWifiNameInMenu ? nil : 0)
+                            .clipped()
+                            .animation(.easeInOut(duration: 0.2), value: showWifiNameInMenu)
 
                         IconSlotRow(label: "Connected",
                                     statusDescription: "Internet access is available and this Mac is online",
@@ -630,6 +723,67 @@ struct SettingsView: View {
         .background(Color(.windowBackgroundColor))
     }
 
+    // MARK: - Keyboard Shortcuts Tab
+
+        private var keyboardShortcutsTab: some View {
+            ScrollView {
+                VStack(spacing: 16) {
+
+                    SettingsSection(title: "Keyboard Shortcuts") {
+                        ShortcutRecorderRow(
+                            title: "Toggle Wi-Fi On / Off",
+                            excludedKey: KeyboardShortcutManager.wifiToggleKey,
+                            shortcut: $wifiToggleShortcut,
+                            onCommit: { sc in
+                                KeyboardShortcutManager.shared.save(sc, for: KeyboardShortcutManager.wifiToggleKey)
+                            }
+                        )
+
+                        Divider().padding(.leading, 14)
+
+                        ShortcutRecorderRow(
+                            title: "Open Wi-Fi Settings",
+                            excludedKey: KeyboardShortcutManager.wifiSettingsKey,
+                            shortcut: $wifiSettingsShortcut,
+                            onCommit: { sc in
+                                KeyboardShortcutManager.shared.save(sc, for: KeyboardShortcutManager.wifiSettingsKey)
+                            }
+                        )
+
+                        Divider().padding(.leading, 14)
+
+                        ShortcutRecorderRow(
+                            title: "Open Network Settings",
+                            excludedKey: KeyboardShortcutManager.vpnSettingsKey,
+                            shortcut: $vpnSettingsShortcut,
+                            onCommit: { sc in
+                                KeyboardShortcutManager.shared.save(sc, for: KeyboardShortcutManager.vpnSettingsKey)
+                            }
+                        )
+                    }
+                    .padding(.horizontal, 0)
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Requires at least one modifier key: ⌃, ⌥, ⇧, or ⌘")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        Text("Click record, then press your desired key combination.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.tertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 14)
+
+                }
+                .padding(20)
+            }
+            .scrollContentBackground(.hidden)
+            .background(Color(.windowBackgroundColor))
+        }
+
     // MARK: - About Tab
 
     private var aboutTab: some View {
@@ -742,12 +896,9 @@ struct SettingsView: View {
             case .authorizedAlways:
                 commitWifiNameInMenu(true)
             case .notDetermined:
-                showWifiNameInMenu = false
                 ssidFeaturePendingAuth = .menuItem
                 showLocationAlert = true
             default:
-                // .denied / .restricted — system-level or app-level location is off
-                showWifiNameInMenu = false
                 ssidFeaturePendingAuth = .menuItem
                 showLocationDeniedAlert = true
             }
@@ -760,9 +911,6 @@ struct SettingsView: View {
         if enabled {
             switch SSIDManager.shared.authorizationStatus {
             case .authorizedAlways:
-                // Authorized — show override warning before committing.
-                // Setting useSSIDAsMenuBarLabel = false here goes directly to @State,
-                // not through the Binding.set, so it does NOT re-trigger this handler.
                 useSSIDAsMenuBarLabel = false
                 showOverrideAlert = true
             case .notDetermined:
@@ -780,13 +928,17 @@ struct SettingsView: View {
     }
 
     private func commitWifiNameInMenu(_ enabled: Bool) {
-        showWifiNameInMenu = enabled
+        wifiNameInMenuSSID = enabled ? SSIDManager.shared.currentSSID() : nil
         UserDefaults.standard.set(enabled, forKey: "showWifiNameInMenu")
+        withAnimation(.easeInOut(duration: 0.2)) {
+            showWifiNameInMenu = enabled
+        }
+        if !enabled && useSSIDAsMenuBarLabel {
+            commitWifiNameAsLabel(false)
+        }
     }
 
     private func commitWifiNameAsLabel(_ enabled: Bool) {
-        // Assigns directly to @State — does NOT go through the Toggle's Binding.set,
-        // so handleUseSSIDAsMenuBarLabelToggle is NOT re-triggered.
         useSSIDAsMenuBarLabel = enabled
         UserDefaults.standard.set(enabled, forKey: "useSSIDAsMenuBarLabel")
         NotificationCenter.default.post(name: .iconPreferencesChanged, object: nil)
@@ -979,27 +1131,47 @@ private struct IconSlotRow: View {
                 HStack(alignment: .bottom, spacing: 14) {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack(spacing: 4) {
-                            Image(systemName: slot.menuLabelEnabled ? "checkmark.circle.fill" : "arrow.down.circle.fill")
-                                .font(.system(size: 10))
-                                .foregroundStyle(slot.menuLabelEnabled ? Color.accentColor : Color.primary.opacity(0.28))
-                                .animation(.easeInOut(duration: 0.15), value: slot.menuLabelEnabled)
-                            Text("Menu Bar Label")
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundStyle(slot.menuLabelEnabled ? Color.accentColor : Color.primary.opacity(0.28))
-                                .animation(.easeInOut(duration: 0.15), value: slot.menuLabelEnabled)
-                        }
-                        TextField(labelDisabled ? "Set by Wi-Fi name" : "optional label", text: Binding(
-                            get: { slot.menuLabel },
-                            set: {
-                                slot.menuLabel = String($0.prefix(15))
-                                let enabled = !slot.menuLabel.isEmpty
-                                if slot.menuLabelEnabled != enabled { slot.menuLabelEnabled = enabled }
-                                onChange()
+                            if labelDisabled {
+                                Text("Menu Bar Label")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundStyle(Color.primary.opacity(0.28))
+                            } else {
+                                Image(systemName: slot.menuLabelEnabled ? "checkmark.circle.fill" : "arrow.down.circle.fill")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(slot.menuLabelEnabled ? Color.accentColor : Color.primary.opacity(0.28))
+                                    .animation(.easeInOut(duration: 0.15), value: slot.menuLabelEnabled)
+                                Text("Menu Bar Label")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundStyle(slot.menuLabelEnabled ? Color.accentColor : Color.primary.opacity(0.28))
+                                    .animation(.easeInOut(duration: 0.15), value: slot.menuLabelEnabled)
                             }
-                        ))
-                        .textFieldStyle(.roundedBorder).font(.system(size: 12)).frame(height: 28)
-                        .disabled(labelDisabled)
-                        .opacity(labelDisabled ? 0.4 : 1)
+                        }
+                        if labelDisabled {
+                            Text("Wi-Fi Name")
+                                .font(.system(size: 11))
+                                .foregroundStyle(Color.secondary.opacity(0.6))
+                                .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
+                                .padding(.horizontal, 8)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 5)
+                                        .fill(Color(.quaternarySystemFill))
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 5)
+                                                .strokeBorder(Color.primary.opacity(0.07), lineWidth: 1)
+                                        )
+                                )
+                        } else {
+                            TextField("optional label", text: Binding(
+                                get: { slot.menuLabel },
+                                set: {
+                                    slot.menuLabel = String($0.prefix(15))
+                                    let enabled = !slot.menuLabel.isEmpty
+                                    if slot.menuLabelEnabled != enabled { slot.menuLabelEnabled = enabled }
+                                    onChange()
+                                }
+                            ))
+                            .textFieldStyle(.roundedBorder).font(.system(size: 12)).frame(height: 28)
+                        }
                     }.frame(maxWidth: .infinity)
 
                     VStack(alignment: .center, spacing: 4) {
@@ -1028,6 +1200,512 @@ private struct IconSlotRow: View {
             }.frame(maxWidth: .infinity)
         }
         .padding(16)
+    }
+}
+
+// MARK: - Shortcut Recorder Row
+
+private struct ShortcutRecorderRow: View {
+    let title:      String
+    let excludedKey: String
+    @Binding var shortcut: KeyboardShortcut?
+    let onCommit: (KeyboardShortcut?) -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Text(title).font(.system(size: 13, weight: .medium))
+            Spacer()
+            ShortcutRecorderField(excludedKey: excludedKey, shortcut: $shortcut, onCommit: onCommit)
+                .frame(width: 200, height: 28)
+        }
+        .padding(.horizontal, 14).padding(.vertical, 11)
+    }
+}
+
+private struct ShortcutRecorderField: NSViewRepresentable {
+
+    let excludedKey: String
+    @Binding var shortcut: KeyboardShortcut?
+    let onCommit: (KeyboardShortcut?) -> Void
+
+    func makeNSView(context: Context) -> ShortcutRecorderNSView {
+        let v = ShortcutRecorderNSView()
+        v.onCommit = { [weak v] sc in
+            DispatchQueue.main.async {
+                self.shortcut = sc
+                self.onCommit(sc)
+                v?.window?.makeFirstResponder(nil)
+            }
+        }
+
+        let excluded = excludedKey
+        v.conflictChecker = { candidate in
+            let allSlots: [(key: String, label: String)] = [
+                (KeyboardShortcutManager.wifiToggleKey,   "Toggle Wi-Fi On / Off"),
+                (KeyboardShortcutManager.wifiSettingsKey, "Open Wi-Fi Settings"),
+                (KeyboardShortcutManager.vpnSettingsKey,  "Open Network Settings"),
+            ]
+            for slot in allSlots {
+                guard slot.key != excluded else { continue }
+                if let existing = KeyboardShortcutManager.shared.shortcut(for: slot.key),
+                   existing.keyCode == candidate.keyCode,
+                   existing.modifiers == candidate.modifiers {
+                    return slot.label
+                }
+            }
+            return nil
+        }
+        return v
+    }
+
+    func updateNSView(_ nsView: ShortcutRecorderNSView, context: Context) {
+        if nsView.shortcut != shortcut {
+            nsView.shortcut = shortcut
+        }
+    }
+}
+
+// MARK: - ShortcutRecorderNSView
+
+private extension Notification.Name {
+
+    static let shortcutRecorderDidBeginRecording = Notification.Name("shortcutRecorderDidBeginRecording")
+}
+
+final class ShortcutRecorderNSView: NSView {
+
+    var onCommit: ((KeyboardShortcut?) -> Void)?
+
+    var conflictChecker: ((KeyboardShortcut) -> String?)?
+
+    var shortcut: KeyboardShortcut? { didSet { needsDisplay = true } }
+
+    private(set) var isRecording: Bool = false {
+        didSet { needsDisplay = true }
+    }
+
+    private var liveModifiers: NSEvent.ModifierFlags = [] {
+        didSet { needsDisplay = true }
+    }
+
+    private var localMonitor: Any?
+    private var flagsMonitor:  Any?
+
+    private let cornerRadius: CGFloat = 8
+    private let hPad:         CGFloat = 10
+    private let fieldHeight:  CGFloat = 28
+    private let minWidth:     CGFloat = 140
+
+    override var intrinsicContentSize: NSSize { NSSize(width: minWidth, height: fieldHeight) }
+    override var acceptsFirstResponder: Bool  { true }
+    override var canBecomeKeyView:      Bool  { true }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(otherRecorderBegan(_:)),
+            name: .shortcutRecorderDidBeginRecording,
+            object: nil
+        )
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    private func startRecording() {
+        guard !isRecording else { return }
+        
+        NotificationCenter.default.post(name: .shortcutRecorderDidBeginRecording, object: self)
+        
+        KeyboardShortcutManager.shared.suspend()
+        liveModifiers = []
+        isRecording = true
+        window?.makeFirstResponder(self)
+        installLocalMonitor()
+        installFlagsMonitor()
+    }
+
+    private func stopRecording(commit: KeyboardShortcut?) {
+        guard isRecording else { return }
+        removeLocalMonitor()
+        removeFlagsMonitor()
+        liveModifiers = []
+        KeyboardShortcutManager.shared.resume()
+        isRecording = false
+
+        guard let sc = commit else { onCommit?(nil); return }
+
+        if let conflictLabel = conflictChecker?(sc) {
+            DispatchQueue.main.async { [weak self] in
+                let alert = NSAlert()
+                alert.messageText = "Shortcut Already in Use"
+                alert.informativeText = "\"\(sc.displayString)\" is already assigned to \"\(conflictLabel)\". \n\nPlease choose a different combination."
+                alert.addButton(withTitle: "OK")
+                alert.alertStyle = .warning
+
+                if let window = self?.window {
+                    alert.beginSheetModal(for: window)
+                } else {
+                    alert.runModal()
+                }
+            }
+            return
+        }
+
+        onCommit?(sc)
+    }
+
+    private func cancelRecording() {
+        guard isRecording else { return }
+        removeLocalMonitor()
+        removeFlagsMonitor()
+        liveModifiers = []
+        KeyboardShortcutManager.shared.resume()
+        isRecording = false
+    }
+
+    @objc private func otherRecorderBegan(_ note: Notification) {
+        
+        guard note.object as? ShortcutRecorderNSView !== self else { return }
+        cancelRecording()
+    }
+
+    private func installLocalMonitor() {
+        guard localMonitor == nil else { return }
+        localMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self, self.isRecording else { return event }
+            self.handleKeyEvent(event)
+            return nil
+        }
+    }
+
+    private func removeLocalMonitor() {
+        if let m = localMonitor { NSEvent.removeMonitor(m) }
+        localMonitor = nil
+    }
+
+    private func installFlagsMonitor() {
+        guard flagsMonitor == nil else { return }
+        flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            guard let self, self.isRecording else { return event }
+            self.liveModifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+            return event
+        }
+    }
+
+    private func removeFlagsMonitor() {
+        if let m = flagsMonitor { NSEvent.removeMonitor(m) }
+        flagsMonitor = nil
+    }
+
+    private func handleKeyEvent(_ event: NSEvent) {
+        if event.keyCode == 53 { cancelRecording(); return }
+        if event.keyCode == 51 || event.keyCode == 117 { stopRecording(commit: nil); return }
+
+        let mods = event.modifierFlags.intersection([.command, .option, .control, .shift])
+
+        let modifierOnlyCodes: Set<UInt16> = [54, 55, 56, 57, 58, 59, 60, 61, 62, 63]
+        if modifierOnlyCodes.contains(event.keyCode) { return }
+
+        guard !mods.isEmpty else { return }
+
+        let sc = KeyboardShortcut(keyCode: event.keyCode, modifiers: mods.rawValue)
+        stopRecording(commit: sc)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let pt = convert(event.locationInWindow, from: nil)
+
+        if shortcut != nil && !isRecording {
+            let clearRect = NSRect(x: bounds.width - fieldHeight, y: 0,
+                                   width: fieldHeight, height: fieldHeight)
+            if clearRect.contains(pt) {
+                onCommit?(nil)
+                DispatchQueue.main.async { [weak self] in
+                    self?.shortcut = nil
+                }
+                return
+            }
+        }
+
+        if isRecording {
+            cancelRecording()
+        } else {
+            startRecording()
+        }
+    }
+
+        override func draw(_ dirtyRect: NSRect) {
+            super.draw(dirtyRect)
+
+            let rect = NSRect(x: 0.5, y: 0.5, width: bounds.width - 1, height: fieldHeight - 1)
+            let path = NSBezierPath(roundedRect: rect, xRadius: cornerRadius, yRadius: cornerRadius)
+
+            if isRecording {
+                NSColor.systemRed.withAlphaComponent(0.04).setFill()
+                path.fill()
+                NSColor.systemRed.withAlphaComponent(0.35).setStroke()
+                path.lineWidth = 1.0
+                path.stroke()
+                drawRecordingState(in: rect)
+            } else if shortcut != nil {
+                drawSetState(in: rect)
+            } else {
+                NSColor.controlBackgroundColor.setFill()
+                path.fill()
+                NSColor.separatorColor.setStroke()
+                path.lineWidth = 0.5
+                path.stroke()
+                drawEmptyState(in: rect)
+            }
+        }
+
+        private func drawEmptyState(in rect: NSRect) {
+            let attrs: [NSAttributedString.Key: Any] = [
+                .font: NSFont.systemFont(ofSize: 12),
+                .foregroundColor: NSColor.placeholderTextColor
+            ]
+            let str = NSAttributedString(string: "Click to record", attributes: attrs)
+            let sz  = str.size()
+            str.draw(at: NSPoint(x: (rect.width - sz.width) / 2,
+                                 y: (fieldHeight - sz.height) / 2))
+        }
+
+        private func drawRecordingState(in rect: NSRect) {
+            let dotD: CGFloat = 7
+            let dotX = hPad + 2
+            let dotY = (fieldHeight - dotD) / 2
+            let dotPath = NSBezierPath(ovalIn: NSRect(x: dotX, y: dotY, width: dotD, height: dotD))
+            NSColor.systemRed.withAlphaComponent(0.95).setFill()
+            dotPath.fill()
+
+            let escFont  = NSFont.monospacedSystemFont(ofSize: 10, weight: .medium)
+            let escText  = "esc"
+            let escAttrs: [NSAttributedString.Key: Any] = [.font: escFont,
+                                                            .foregroundColor: NSColor.secondaryLabelColor]
+            let escTextSz  = (escText as NSString).size(withAttributes: escAttrs)
+            let escCapH: CGFloat = 16
+            let escCapW          = escTextSz.width + 10
+            let escCapX          = rect.width - hPad - escCapW
+            let escCapY          = (fieldHeight - escCapH) / 2
+            let escCapRect       = NSRect(x: escCapX, y: escCapY, width: escCapW, height: escCapH)
+            let escPath          = NSBezierPath(roundedRect: escCapRect, xRadius: 4, yRadius: 4)
+            NSColor.labelColor.withAlphaComponent(0.07).setFill()
+            escPath.fill()
+            NSColor.labelColor.withAlphaComponent(0.18).setStroke()
+            escPath.lineWidth = 0.5
+            escPath.stroke()
+            NSAttributedString(string: escText, attributes: escAttrs)
+                .draw(at: NSPoint(x: escCapX + (escCapW - escTextSz.width) / 2,
+                                  y: escCapY + (escCapH - escTextSz.height) / 2))
+
+            let leftEdge  = dotX + dotD + 8
+            let rightEdge = escCapX - 6
+
+            if liveModifiers.isEmpty {
+                let labelAttrs: [NSAttributedString.Key: Any] = [
+                    .font: NSFont.systemFont(ofSize: 12, weight: .medium),
+                    .foregroundColor: NSColor.systemRed.withAlphaComponent(0.9)
+                ]
+                let label   = NSAttributedString(string: "Recording…", attributes: labelAttrs)
+                let labelSz = label.size()
+                let labelX  = leftEdge + ((rightEdge - leftEdge) - labelSz.width) / 2
+                label.draw(at: NSPoint(x: max(leftEdge, labelX),
+                                       y: (fieldHeight - labelSz.height) / 2))
+            } else {
+                drawLiveModifiers(leftEdge: leftEdge, rightEdge: rightEdge)
+            }
+        }
+
+    private func drawLiveModifiers(leftEdge: CGFloat, rightEdge: CGFloat) {
+        var parts: [String] = []
+        if liveModifiers.contains(.control) { parts.append("⌃") }
+        if liveModifiers.contains(.option)  { parts.append("⌥") }
+        if liveModifiers.contains(.shift)   { parts.append("⇧") }
+        if liveModifiers.contains(.command) { parts.append("⌘") }
+        guard !parts.isEmpty else { return }
+
+        let font = NSFont.monospacedSystemFont(ofSize: 14, weight: .semibold)
+        let textColor   = NSColor.white.withAlphaComponent(0.95)
+
+        let displayString = parts.joined(separator: " + ")
+
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: textColor,
+            .kern: -0.3
+        ]
+
+        let str = NSAttributedString(string: displayString, attributes: attrs)
+        let textSize = str.size()
+
+        let padX: CGFloat = 10
+        let padY: CGFloat = 4
+
+        let outerPadY: CGFloat = 6
+
+        let totalW = textSize.width + padX * 2
+        let totalH = textSize.height + padY * 2
+
+        let availW = rightEdge - leftEdge
+        let originX = leftEdge + (availW - totalW) / 2
+
+        let availableHeight = fieldHeight - outerPadY * 2
+        let originY = outerPadY + (availableHeight - totalH) / 2
+
+        let bgRect = NSRect(x: originX, y: originY, width: totalW, height: totalH)
+
+        let bgColor     = NSColor.white.withAlphaComponent(0.08)
+        let borderColor = NSColor.white.withAlphaComponent(0.25)
+        
+        let path = NSBezierPath(roundedRect: bgRect, xRadius: 8, yRadius: 8)
+        bgColor.setFill()
+        path.fill()
+
+        borderColor.setStroke()
+        path.lineWidth = 1
+        path.stroke()
+
+        let textX = originX + (totalW - textSize.width) / 2
+        let textY = originY + (totalH - textSize.height) / 2
+
+        str.draw(at: NSPoint(x: textX, y: textY))
+    }
+
+        private func drawSetState(in rect: NSRect) {
+            guard let sc = shortcut else { return }
+
+            let xAttrs: [NSAttributedString.Key: Any] = [
+                .font: NSFont.systemFont(ofSize: 14, weight: .light),
+                .foregroundColor: NSColor.tertiaryLabelColor
+            ]
+            let xStr = NSAttributedString(string: "×", attributes: xAttrs)
+            let xSz  = xStr.size()
+            let xX   = rect.width - hPad - xSz.width
+            xStr.draw(at: NSPoint(x: xX, y: (fieldHeight - xSz.height) / 2))
+
+            drawKeyCaps(for: sc, rightEdge: xX - 8, in: rect)
+        }
+
+    private func drawKeyCaps(for sc: KeyboardShortcut, rightEdge: CGFloat, in rect: NSRect) {
+        var parts: [String] = []
+        let flags = sc.modifierFlags
+        if flags.contains(.control) { parts.append("⌃") }
+        if flags.contains(.option)  { parts.append("⌥") }
+        if flags.contains(.shift)   { parts.append("⇧") }
+        if flags.contains(.command) { parts.append("⌘") }
+        parts.append(KeyboardShortcut.keyCodeToString(sc.keyCode))
+
+        let capFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .semibold)
+        let capPad: CGFloat = 4
+        let capR:   CGFloat = 6
+
+        let sampleH = ("W" as NSString).size(withAttributes: [.font: capFont]).height
+        let capH    = ceil(sampleH + capPad * 2)
+        let minCapW = capH
+
+        let capFill   = NSColor.white.withAlphaComponent(0.08)
+        let capBorder = NSColor.white.withAlphaComponent(0.25)
+
+        let plusAttrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 10, weight: .regular),
+            .foregroundColor: NSColor.white.withAlphaComponent(0.5)
+        ]
+        let plusStr  = NSAttributedString(string: "+", attributes: plusAttrs)
+        let plusSz   = plusStr.size()
+        let plusGap: CGFloat = 3
+
+        var widths: [CGFloat] = []
+        for part in parts {
+            let textW = (part as NSString).size(withAttributes: [.font: capFont]).width
+            widths.append(max(minCapW, ceil(textW + capPad * 2)))
+        }
+
+        var totalWidth: CGFloat = widths.reduce(0, +)
+        if parts.count > 1 {
+            totalWidth += CGFloat(parts.count - 1) * (plusGap * 2 + ceil(plusSz.width))
+        }
+
+        var x    = rightEdge - totalWidth
+        let capY = (fieldHeight - capH) / 2
+
+        for (i, part) in parts.enumerated() {
+            let w       = widths[i]
+            let capRect = NSRect(x: x, y: capY, width: w, height: capH)
+            let capPath = NSBezierPath(roundedRect: capRect, xRadius: capR, yRadius: capR)
+
+            capFill.setFill()
+            capPath.fill()
+
+            capBorder.setStroke()
+            capPath.lineWidth = 1
+            capPath.stroke()
+
+            let textAttrs: [NSAttributedString.Key: Any] = [
+                .font: capFont,
+                .foregroundColor: NSColor.white.withAlphaComponent(0.95)
+            ]
+            let str = NSAttributedString(string: part, attributes: textAttrs)
+            let sz  = str.size()
+
+            str.draw(at: NSPoint(
+                x: x + (w - sz.width) / 2,
+                y: capY + (capH - sz.height) / 2
+            ))
+
+            x += w
+
+            if i < parts.count - 1 {
+                x += plusGap
+                plusStr.draw(at: NSPoint(
+                    x: x,
+                    y: capY + (capH - plusSz.height) / 2
+                ))
+                x += ceil(plusSz.width) + plusGap
+            }
+        }
+    }
+
+        deinit {
+            removeLocalMonitor()
+            removeFlagsMonitor()
+            NotificationCenter.default.removeObserver(self)
+        }
+    }
+
+// MARK: - IP Hide Block
+
+private struct IPHideBlock: View {
+
+    @Binding var hideIPv4: Bool
+    @Binding var hideIPv6: Bool
+    let onIPv4Changed: () -> Void
+    let onIPv6Changed: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Text("IPv4").font(.system(size: 12)).foregroundStyle(.primary)
+                Spacer()
+                Toggle("", isOn: $hideIPv4).labelsHidden()
+                    .onChange(of: hideIPv4) { _, _ in onIPv4Changed() }
+            }
+            .padding(.horizontal, 12).padding(.vertical, 9)
+
+            Divider()
+
+            HStack(spacing: 10) {
+                Text("IPv6").font(.system(size: 12)).foregroundStyle(.primary)
+                Spacer()
+                Toggle("", isOn: $hideIPv6).labelsHidden()
+                    .onChange(of: hideIPv6) { _, _ in onIPv6Changed() }
+            }
+            .padding(.horizontal, 12).padding(.vertical, 9)
+        }
+        .background(Color(.windowBackgroundColor).opacity(0.45))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.primary.opacity(0.1), lineWidth: 1))
+        .padding(.leading, 56).padding(.trailing, 14).padding(.bottom, 12)
     }
 }
 

@@ -93,17 +93,13 @@ final class PopoverManager {
     }
 
     func showCopied(_ label: String) {
-        let content = HStack(spacing: 6) {
-            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-            Text(label).font(.system(size: 13))
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        show(content: content, autoDismissAfter: 1.5)
+        showText(label)
     }
 
+    /// Shows the startup greeting. Duration is 2 s so the AppDelegate's
+    /// 2.3 s gate timer always fires after the tooltip has auto-dismissed.
     func showLaunchTooltip() {
-        showText("\(AppInfo.appName) is running", autoDismissAfter: 2.0)
+        showText("\(AppInfo.appName) running", autoDismissAfter: 2.0)
     }
 
     /// "Turning On Wi-Fi…" / "Turning Off Wi-Fi…" — persists until dismissed.
@@ -113,7 +109,7 @@ final class PopoverManager {
 
     /// "Wi-Fi On" / "Wi-Fi Off" — shown after a power-state change completes.
     func showWiFiPowerChanged(isOn: Bool) {
-        showText(isOn ? "Wi-Fi On" : "Wi-Fi Off")
+        showText(isOn ? "Wi-Fi On" : "Wi-Fi Off", autoDismissAfter: 1.0)
     }
 
     /// "Opening Wi-Fi Settings" — brief acknowledgement before the pref pane opens.
@@ -121,22 +117,18 @@ final class PopoverManager {
         showText("Opening Wi-Fi Settings")
     }
 
+    /// "Opening VPN Settings" — brief acknowledgement before the pref pane opens.
+    func showOpeningVPNSettings() {
+        showText("Opening Network Settings")
+    }
+
     /// "No Network" — shown when SSID is lost while Wi-Fi is still powered on.
     func showNoNetwork() {
         showText("No Network")
     }
 
-    /// Shows a "Switched to 'NetworkName'" popover when the user joins a different network.
+    /// "Switched to 'NetworkName'" — shown when the user joins a different network.
     func showNetworkSwitched(to ssid: String) {
-        let content = HStack(spacing: 7) {
-            Image(systemName: "wifi")
-                .font(.system(size: 13))
-                .foregroundStyle(.secondary)
-            Text("Switched to \u{201C}\(ssid)\u{201D}")
-                .font(.system(size: 13))
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        show(content: content, autoDismissAfter: 1.5)
+        showText("Switched to \u{201C}\(ssid)\u{201D}", autoDismissAfter: 2.0)
     }
 }
