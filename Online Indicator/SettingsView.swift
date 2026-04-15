@@ -1526,7 +1526,8 @@ final class ShortcutRecorderNSView: NSView {
         guard !parts.isEmpty else { return }
 
         let font = NSFont.monospacedSystemFont(ofSize: 14, weight: .semibold)
-        let textColor   = NSColor.white.withAlphaComponent(0.95)
+        
+        let textColor = NSColor.labelColor.withAlphaComponent(0.95)
 
         let displayString = parts.joined(separator: " + ")
 
@@ -1555,8 +1556,8 @@ final class ShortcutRecorderNSView: NSView {
 
         let bgRect = NSRect(x: originX, y: originY, width: totalW, height: totalH)
 
-        let bgColor     = NSColor.white.withAlphaComponent(0.08)
-        let borderColor = NSColor.white.withAlphaComponent(0.25)
+        let bgColor     = NSColor.labelColor.withAlphaComponent(0.08)
+        let borderColor = NSColor.labelColor.withAlphaComponent(0.25)
         
         let path = NSBezierPath(roundedRect: bgRect, xRadius: 8, yRadius: 8)
         bgColor.setFill()
@@ -1604,12 +1605,12 @@ final class ShortcutRecorderNSView: NSView {
         let capH    = ceil(sampleH + capPad * 2)
         let minCapW = capH
 
-        let capFill   = NSColor.white.withAlphaComponent(0.08)
-        let capBorder = NSColor.white.withAlphaComponent(0.25)
+        let capFill   = NSColor.labelColor.withAlphaComponent(0.08)
+        let capBorder = NSColor.labelColor.withAlphaComponent(0.25)
 
         let plusAttrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 10, weight: .regular),
-            .foregroundColor: NSColor.white.withAlphaComponent(0.5)
+            .foregroundColor: NSColor.labelColor.withAlphaComponent(0.5)
         ]
         let plusStr  = NSAttributedString(string: "+", attributes: plusAttrs)
         let plusSz   = plusStr.size()
@@ -1643,7 +1644,7 @@ final class ShortcutRecorderNSView: NSView {
 
             let textAttrs: [NSAttributedString.Key: Any] = [
                 .font: capFont,
-                .foregroundColor: NSColor.white.withAlphaComponent(0.95)
+                .foregroundColor: NSColor.labelColor.withAlphaComponent(0.95)
             ]
             let str = NSAttributedString(string: part, attributes: textAttrs)
             let sz  = str.size()
