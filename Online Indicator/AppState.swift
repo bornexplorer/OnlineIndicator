@@ -16,6 +16,8 @@ class AppState {
         case noNetwork
     }
 
+    private(set) var currentStatus: ConnectionStatus = .noNetwork
+
     var statusUpdateHandler: ((ConnectionStatus) -> Void)?
 
     var checkNowResultHandler: ((ConnectionStatus) -> Void)?
@@ -91,17 +93,43 @@ class AppState {
 
         if !networkMonitor.isConnected {
             let status = ConnectionStatus.noNetwork
+            currentStatus = status
             statusUpdateHandler?(status)
             if onDemand { checkNowResultHandler?(status) }
+            record(status: status, latencyMs: nil)
             return
         }
 
-        connectivityChecker.checkOutboundConnection { [weak self] reachable in
+        connectivityChecker.checkOutboundConnection { [weak self] reachable, latencyMs in
             DispatchQueue.main.async {
                 let status: ConnectionStatus = reachable ? .connected : .blocked
+                self?.currentStatus = status
                 self?.statusUpdateHandler?(status)
                 if onDemand { self?.checkNowResultHandler?(status) }
+                self?.record(status: status, latencyMs: latencyMs)
             }
         }
+    }
+
+    private func record(status: ConnectionStatus, latencyMs: Int?) {
+        let statusString: String = {
+            switch status {
+            case .connected: return "connected"
+            case .blocked:   return "blocked"
+            case .noNetwork: return "noNetwork"
+            }
+        }()
+
+        let timestamp = Int64(Date().timeIntervalSince1970 * 1000)
+        let ssid = SSIDManager.shared.currentSSID()
+        let probeUrl = ConnectivityChecker.monitoringURLString
+
+        HistoryStore.shared.insert(
+            timestamp: timestamp,
+            status: statusString,
+            latencyMs: latencyMs,
+            ssid: ssid,
+            probeUrl: probeUrl
+        )
     }
 }

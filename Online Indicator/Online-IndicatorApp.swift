@@ -51,8 +51,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
 
         UserDefaults.standard.register(defaults: [
             "leftRightClickEnabled": true,
-            "leftClickAction":       "wifi",
-            "rightClickAction":      "menu",
+            "leftClickAction":       "historyPopover",
+            "rightClickAction":      "wifi",
             "leftRightClickSwapped": false,
             "hideIPv4":              false,
             "hideIPv6":              false,
@@ -440,8 +440,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
 
         let enabled  = UserDefaults.standard.bool(forKey: "leftRightClickEnabled")
         let swapped  = UserDefaults.standard.bool(forKey: "leftRightClickSwapped")
-        let leftAct  = UserDefaults.standard.string(forKey: "leftClickAction")  ?? "wifi"
-        let rightAct = UserDefaults.standard.string(forKey: "rightClickAction") ?? "menu"
+        let leftAct  = UserDefaults.standard.string(forKey: "leftClickAction")  ?? "historyPopover"
+        let rightAct = UserDefaults.standard.string(forKey: "rightClickAction") ?? "wifi"
 
         guard enabled else { showDropdownMenu(); return }
 
@@ -470,9 +470,23 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
             performWiFiToggle()
         case "settings":
             openSettings()
+        case "historyPopover":
+            showHistoryPopover()
         default:
             showDropdownMenu()
         }
+    }
+
+    private func showHistoryPopover() {
+        if popoverManager.isShowing {
+            popoverManager.dismiss()
+            return
+        }
+        popoverManager.showPersistent(
+            content: HistoryPopoverView(dismissAction: { [weak self] in
+                self?.popoverManager.dismiss()
+            })
+        )
     }
 
     private func showDropdownMenu() {

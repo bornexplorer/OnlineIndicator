@@ -21,12 +21,12 @@ class ConnectivityChecker {
         return URLSession(configuration: configuration)
     }()
 
-    func checkOutboundConnection(completion: @escaping (Bool) -> Void) {
+    func checkOutboundConnection(completion: @escaping (Bool, Int?) -> Void) {
 
         print("Attempting outbound connection to:", Self.monitoringURLString)
 
         guard let url = URL(string: Self.monitoringURLString) else {
-            completion(false)
+            completion(false, nil)
             return
         }
 
@@ -37,10 +37,13 @@ class ConnectivityChecker {
         request.httpMethod = "GET"
         request.timeoutInterval = 5
 
+        let startTime = Date()
+
         let task = session.dataTask(with: request) { [weak self] _, response, error in
 
-            if let urlError = error as? URLError, urlError.code == .cancelled {
+            let latencyMs = Int(Date().timeIntervalSince(startTime) * 1000)
 
+            if let urlError = error as? URLError, urlError.code == .cancelled {
                 return
             }
 
@@ -48,15 +51,15 @@ class ConnectivityChecker {
 
             if let error = error {
                 print("Outbound Error:", error.localizedDescription)
-                completion(false)
+                completion(false, nil)
                 return
             }
 
             if let httpResponse = response as? HTTPURLResponse,
                (200...399).contains(httpResponse.statusCode) {
-                completion(true)
+                completion(true, latencyMs)
             } else {
-                completion(false)
+                completion(false, nil)
             }
         }
 
