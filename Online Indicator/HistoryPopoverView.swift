@@ -49,7 +49,7 @@ struct HistoryPopoverView: View {
                 .padding(.vertical, 10)
 
                 HistoryChartView()
-                    .frame(width: 840, height: 440)
+                    .frame(width: 840, height: 240)
             }
 
             Divider().padding(.horizontal, 14)

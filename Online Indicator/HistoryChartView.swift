@@ -41,6 +41,26 @@ struct HistoryChartView: View {
             case .allTime:   return "30 min"
             }
         }
+
+        var xAxisStride: Calendar.Component {
+            switch self {
+            case .oneHour:   return .minute
+            case .sixHours:  return .minute
+            case .oneDay:    return .hour
+            case .sevenDays: return .day
+            case .allTime:   return .day
+            }
+        }
+
+        var xAxisStrideCount: Int {
+            switch self {
+            case .oneHour:   return 10
+            case .sixHours:  return 30
+            case .oneDay:    return 2
+            case .sevenDays: return 1
+            case .allTime:   return 7
+            }
+        }
     }
 
     // MARK: - Chart data model
@@ -197,7 +217,7 @@ struct HistoryChartView: View {
             .foregroundStyle(color(for: segment.status))
         }
         .chartXAxis {
-            AxisMarks(values: .automatic) { _ in
+            AxisMarks(values: .stride(by: selectedRange.xAxisStride, count: selectedRange.xAxisStrideCount)) { _ in
                 AxisValueLabel(format: xAxisDateFormat, centered: true)
                     .font(.system(size: 10))
                 AxisGridLine()
@@ -294,7 +314,7 @@ struct HistoryChartView: View {
         case .oneDay:
             return .dateTime.hour().minute()
         case .sevenDays:
-            return .dateTime.month().day().hour()
+            return .dateTime.month().day()
         case .allTime:
             return .dateTime.month().day()
         }
