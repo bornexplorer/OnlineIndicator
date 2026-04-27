@@ -7,9 +7,11 @@ import AppKit
 // Initialised with a button provider closure so it always resolves the
 // current NSStatusBarButton without holding a strong reference to it.
 
-final class PopoverManager {
+final class PopoverManager: NSObject, NSPopoverDelegate {
 
     private var activePopover: NSPopover?
+    private var resignActiveObserver: NSObjectProtocol?
+    private var activateObserver: NSObjectProtocol?
     private let buttonProvider: () -> NSStatusBarButton?
 
     init(buttonProvider: @escaping () -> NSStatusBarButton?) {
@@ -18,11 +20,12 @@ final class PopoverManager {
 
     // MARK: - Core show / dismiss
 
-    func show<Content: View>(content: Content, autoDismissAfter delay: Double) {
+    var isShowing: Bool { activePopover != nil }
+
+    private func show<Content: View>(content: Content, persistent: Bool, autoDismissAfter delay: Double) {
         guard let button = buttonProvider() else { return }
 
-        activePopover?.performClose(nil)
-        activePopover = nil
+        dismiss()
 
         let hostingView = NSHostingView(rootView: content)
         let size = hostingView.fittingSize
@@ -32,16 +35,26 @@ final class PopoverManager {
         controller.view = hostingView
 
         let popover = NSPopover()
-        popover.behavior = .transient
+        popover.behavior = persistent ? .applicationDefined : .transient
         popover.animates  = true
         popover.contentSize = size
         popover.contentViewController = controller
+        popover.delegate = self
 
         let anchor = NSRect(x: button.bounds.midX - 1, y: 0,
                             width: 2, height: button.bounds.height)
         popover.show(relativeTo: anchor, of: button, preferredEdge: .minY)
 
         activePopover = popover
+
+        if persistent {
+            // Activate the app so didResignActiveNotification fires on outside click.
+            // Use a real delay so the current mouse-up event fully resolves first.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                guard self?.activePopover != nil else { return }
+                NSApp.activate(ignoringOtherApps: true)
+            }
+        }
 
         if delay > 0 {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self, weak popover] in
@@ -51,9 +64,73 @@ final class PopoverManager {
         }
     }
 
+    /// Show a persistent popover that dismisses on outside click and Escape.
+    func showPersistent<Content: View>(content: Content) {
+        show(content: content, persistent: true, autoDismissAfter: 0)
+        installResignActiveObserver()
+        installActivateObserver()
+    }
+
     func dismiss() {
         activePopover?.performClose(nil)
         activePopover = nil
+        removeResignActiveObserver()
+        removeActivateObserver()
+    }
+
+    // MARK: - Resign-active observer (primary outside-click dismissal)
+
+    private func installResignActiveObserver() {
+        removeResignActiveObserver()
+        resignActiveObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didResignActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.dismiss()
+        }
+    }
+
+    private func removeResignActiveObserver() {
+        if let obs = resignActiveObserver {
+            NotificationCenter.default.removeObserver(obs)
+        }
+        resignActiveObserver = nil
+    }
+
+    // MARK: - Activate observer (fallback: catches clicks that switch to another app)
+
+    private func installActivateObserver() {
+        removeActivateObserver()
+        let ourBundleID = Bundle.main.bundleIdentifier ?? ""
+        activateObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self, self.activePopover != nil else { return }
+            let activatedApp = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            if activatedApp?.bundleIdentifier != ourBundleID {
+                self.dismiss()
+            }
+        }
+    }
+
+    private func removeActivateObserver() {
+        if let obs = activateObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(obs)
+        }
+        activateObserver = nil
+    }
+
+    // MARK: - NSPopoverDelegate
+
+    func popoverDidClose(_ notification: Notification) {
+        guard let closed = notification.object as? NSPopover,
+              closed === activePopover else { return }
+        activePopover = nil
+        removeResignActiveObserver()
+        removeActivateObserver()
     }
 
     // MARK: - Named notifications
@@ -63,7 +140,7 @@ final class PopoverManager {
             .font(.system(size: 13))
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
-        show(content: content, autoDismissAfter: delay)
+        show(content: content, persistent: delay == 0, autoDismissAfter: delay)
     }
 
     func showPersistentText(_ text: String) {
@@ -80,7 +157,7 @@ final class PopoverManager {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        show(content: content, autoDismissAfter: 0)
+        show(content: content, persistent: true, autoDismissAfter: 0)
     }
 
     func showConnectionStatus(_ status: AppState.ConnectionStatus) {
@@ -96,38 +173,30 @@ final class PopoverManager {
         showText(label)
     }
 
-    /// Shows the startup greeting. Duration is 2 s so the AppDelegate's
-    /// 2.3 s gate timer always fires after the tooltip has auto-dismissed.
     func showLaunchTooltip() {
         showText("\(AppInfo.appName) running", autoDismissAfter: 2.0)
     }
 
-    /// "Turning On Wi-Fi…" / "Turning Off Wi-Fi…" — persists until dismissed.
     func showWiFiToggling(turningOn: Bool) {
         showPersistentText(turningOn ? "Turning On Wi-Fi…" : "Turning Off Wi-Fi…")
     }
 
-    /// "Wi-Fi On" / "Wi-Fi Off" — shown after a power-state change completes.
     func showWiFiPowerChanged(isOn: Bool) {
         showText(isOn ? "Wi-Fi On" : "Wi-Fi Off", autoDismissAfter: 1.0)
     }
 
-    /// "Opening Wi-Fi Settings" — brief acknowledgement before the pref pane opens.
     func showOpeningWiFiSettings() {
         showText("Opening Wi-Fi Settings")
     }
 
-    /// "Opening VPN Settings" — brief acknowledgement before the pref pane opens.
     func showOpeningVPNSettings() {
         showText("Opening Network Settings")
     }
 
-    /// "No Network" — shown when SSID is lost while Wi-Fi is still powered on.
     func showNoNetwork() {
         showText("No Network")
     }
 
-    /// "Switched to 'NetworkName'" — shown when the user joins a different network.
     func showNetworkSwitched(to ssid: String) {
         showText("Switched to \u{201C}\(ssid)\u{201D}", autoDismissAfter: 2.0)
     }

@@ -7,7 +7,7 @@ struct SettingsView: View {
     @State private var selectedTab   = 0
     @State private var interval: Double = {
         let v = UserDefaults.standard.double(forKey: "refreshInterval")
-        return v == 0 ? 60 : v
+        return v == 0 ? 5 : v
     }()
     @State private var intervalText    = ""
     @State private var intervalSaved   = false
@@ -18,8 +18,8 @@ struct SettingsView: View {
     @State private var isLaunchEnabled = false
 
     @State private var leftRightClickEnabled = true
-    @State private var leftClickAction       = "wifi"
-    @State private var rightClickAction      = "menu"
+    @State private var leftClickAction       = "historyPopover"
+    @State private var rightClickAction      = "wifi"
     @State private var leftRightClickSwapped = false
 
     @State private var hideIPv4 = false
@@ -35,6 +35,7 @@ struct SettingsView: View {
     @State private var showLocationAlert       = false
     @State private var showLocationDeniedAlert = false
     @State private var showOverrideAlert       = false
+    @State private var showClearHistoryAlert  = false
 
     enum UpdateStatus: Equatable {
         case idle
@@ -61,6 +62,7 @@ struct SettingsView: View {
     @State private var vpnSettingsShortcut:  KeyboardShortcut? = KeyboardShortcutManager.shared.shortcut(for: KeyboardShortcutManager.vpnSettingsKey)
 
     private let leftClickOptions: [(label: String, tag: String)] = [
+        ("Show History",                 "historyPopover"),
         ("None",                         "none"),
         ("Open Wi-Fi Settings",          "wifi"),
         ("Open Network Settings",        "vpnSettings"),
@@ -172,8 +174,8 @@ struct SettingsView: View {
             blockedSlot           = IconPreferences.slot(for: .blocked)
             noNetworkSlot         = IconPreferences.slot(for: .noNetwork)
             leftRightClickEnabled = UserDefaults.standard.bool(forKey: "leftRightClickEnabled")
-            leftClickAction       = UserDefaults.standard.string(forKey: "leftClickAction")  ?? "wifi"
-            rightClickAction      = UserDefaults.standard.string(forKey: "rightClickAction") ?? "menu"
+            leftClickAction       = UserDefaults.standard.string(forKey: "leftClickAction")  ?? "historyPopover"
+            rightClickAction      = UserDefaults.standard.string(forKey: "rightClickAction") ?? "wifi"
             leftRightClickSwapped = UserDefaults.standard.bool(forKey: "leftRightClickSwapped")
             hideIPv4              = UserDefaults.standard.bool(forKey: "hideIPv4")
             hideIPv6              = UserDefaults.standard.bool(forKey: "hideIPv6")
@@ -191,8 +193,8 @@ struct SettingsView: View {
             blockedSlot           = IconPreferences.slot(for: .blocked)
             noNetworkSlot         = IconPreferences.slot(for: .noNetwork)
             leftRightClickEnabled = UserDefaults.standard.bool(forKey: "leftRightClickEnabled")
-            leftClickAction       = UserDefaults.standard.string(forKey: "leftClickAction")  ?? "wifi"
-            rightClickAction      = UserDefaults.standard.string(forKey: "rightClickAction") ?? "menu"
+            leftClickAction       = UserDefaults.standard.string(forKey: "leftClickAction")  ?? "historyPopover"
+            rightClickAction      = UserDefaults.standard.string(forKey: "rightClickAction") ?? "wifi"
             leftRightClickSwapped = UserDefaults.standard.bool(forKey: "leftRightClickSwapped")
             hideIPv4              = UserDefaults.standard.bool(forKey: "hideIPv4")
             hideIPv6              = UserDefaults.standard.bool(forKey: "hideIPv6")
@@ -254,6 +256,12 @@ struct SettingsView: View {
             Button("Cancel", role: .cancel) { }
         } message: {
             Text("Your Wi-Fi network name will replace the custom menu bar label for the Connected and Blocked states. Your custom labels are preserved and restored if you turn this off.")
+        }
+        .alert("Clear Connection History", isPresented: $showClearHistoryAlert) {
+            Button("Clear", role: .destructive) { performClearHistory() }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("This will permanently delete all stored connection history data.")
         }
     }
 
@@ -317,7 +325,7 @@ struct SettingsView: View {
                         Spacer().frame(width: 56)
                         HStack(spacing: 8) {
                             HStack(spacing: 6) {
-                                ForEach([("30s", 30.0), ("1m", 60.0), ("2m", 120.0), ("5m", 300.0)], id: \.1) { lbl, val in
+                                ForEach([("5s", 5.0), ("10s", 10.0), ("30s", 30.0), ("1m", 60.0)], id: \.1) { lbl, val in
                                     Button {
                                         withAnimation(.easeInOut(duration: 0.15)) {
                                             interval = val; intervalText = formatInterval(val); intervalInvalid = false
@@ -406,6 +414,24 @@ struct SettingsView: View {
                         Spacer()
                     }
                     .padding(.bottom, 12)
+
+                    Divider().padding(.leading, 56)
+
+                    HStack(spacing: 0) {
+                        Spacer().frame(width: 56)
+                        HStack {
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text("Connection History").font(.system(size: 13, weight: .medium))
+                                Text("Stored locally — view via left-click on the menu bar icon").font(.system(size: 11)).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button("Clear History") { clearHistory() }
+                                .buttonStyle(.bordered).controlSize(.small)
+                                .foregroundStyle(.red)
+                        }
+                        .padding(.trailing, 14)
+                    }
+                    .padding(.vertical, 11)
                 }
 
                 SettingsSection(title: "Icon & Menu Options") {
@@ -873,6 +899,16 @@ struct SettingsView: View {
         withAnimation { pingURL = "" }
         withAnimation { pingURLSaved = true }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { withAnimation { pingURLSaved = false } }
+    }
+
+    private func clearHistory() {
+        showClearHistoryAlert = true
+    }
+
+    private func performClearHistory() {
+        HistoryStore.shared.clearAll {
+            // The History tab will reload on next appearance
+        }
     }
 
     private func saveCurrentSet() {
