@@ -7,7 +7,7 @@ struct SettingsView: View {
     @State private var selectedTab   = 0
     @State private var interval: Double = {
         let v = UserDefaults.standard.double(forKey: "refreshInterval")
-        return v == 0 ? 60 : v
+        return v == 0 ? 5 : v
     }()
     @State private var intervalText    = ""
     @State private var intervalSaved   = false
@@ -325,7 +325,7 @@ struct SettingsView: View {
                         Spacer().frame(width: 56)
                         HStack(spacing: 8) {
                             HStack(spacing: 6) {
-                                ForEach([("30s", 30.0), ("1m", 60.0), ("2m", 120.0), ("5m", 300.0)], id: \.1) { lbl, val in
+                                ForEach([("5s", 5.0), ("10s", 10.0), ("30s", 30.0), ("1m", 60.0)], id: \.1) { lbl, val in
                                     Button {
                                         withAnimation(.easeInOut(duration: 0.15)) {
                                             interval = val; intervalText = formatInterval(val); intervalInvalid = false

@@ -11,6 +11,7 @@ final class PopoverManager: NSObject, NSPopoverDelegate {
 
     private var activePopover: NSPopover?
     private var resignActiveObserver: NSObjectProtocol?
+    private var activateObserver: NSObjectProtocol?
     private let buttonProvider: () -> NSStatusBarButton?
 
     init(buttonProvider: @escaping () -> NSStatusBarButton?) {
@@ -48,8 +49,9 @@ final class PopoverManager: NSObject, NSPopoverDelegate {
 
         if persistent {
             // Activate the app so didResignActiveNotification fires on outside click.
-            // Brief delay avoids this click from immediately deactivating the app.
-            DispatchQueue.main.async {
+            // Use a real delay so the current mouse-up event fully resolves first.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                guard self?.activePopover != nil else { return }
                 NSApp.activate(ignoringOtherApps: true)
             }
         }
@@ -66,15 +68,17 @@ final class PopoverManager: NSObject, NSPopoverDelegate {
     func showPersistent<Content: View>(content: Content) {
         show(content: content, persistent: true, autoDismissAfter: 0)
         installResignActiveObserver()
+        installActivateObserver()
     }
 
     func dismiss() {
         activePopover?.performClose(nil)
         activePopover = nil
         removeResignActiveObserver()
+        removeActivateObserver()
     }
 
-    // MARK: - Resign-active observer (outside-click dismissal)
+    // MARK: - Resign-active observer (primary outside-click dismissal)
 
     private func installResignActiveObserver() {
         removeResignActiveObserver()
@@ -94,6 +98,31 @@ final class PopoverManager: NSObject, NSPopoverDelegate {
         resignActiveObserver = nil
     }
 
+    // MARK: - Activate observer (fallback: catches clicks that switch to another app)
+
+    private func installActivateObserver() {
+        removeActivateObserver()
+        let ourBundleID = Bundle.main.bundleIdentifier ?? ""
+        activateObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self, self.activePopover != nil else { return }
+            let activatedApp = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            if activatedApp?.bundleIdentifier != ourBundleID {
+                self.dismiss()
+            }
+        }
+    }
+
+    private func removeActivateObserver() {
+        if let obs = activateObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(obs)
+        }
+        activateObserver = nil
+    }
+
     // MARK: - NSPopoverDelegate
 
     func popoverDidClose(_ notification: Notification) {
@@ -101,6 +130,7 @@ final class PopoverManager: NSObject, NSPopoverDelegate {
               closed === activePopover else { return }
         activePopover = nil
         removeResignActiveObserver()
+        removeActivateObserver()
     }
 
     // MARK: - Named notifications

@@ -57,10 +57,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
             "hideIPv4":              false,
             "hideIPv6":              false,
             "useSSIDAsMenuBarLabel": false,
-            "showWifiNameInMenu":    false
+            "showWifiNameInMenu":    false,
+            "refreshInterval":       5.0
         ])
 
-        if UserDefaults.standard.object(forKey: "refreshInterval") == nil {
+        // didCompleteOnboarding is set after onboarding. Also check for
+        // existing users who set refreshInterval before this key existed.
+        if !UserDefaults.standard.bool(forKey: "didCompleteOnboarding")
+            && UserDefaults.standard.object(forKey: "refreshInterval") == nil {
             showOnboarding()
         } else {
             startApp()

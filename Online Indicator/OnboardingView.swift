@@ -3,13 +3,13 @@ import AppKit
 
 struct OnboardingView: View {
 
-    @State private var interval: Double = 30
+    @State private var interval: Double = 5
     @State private var appeared = false
     @State private var launchAtLogin = false
     var onStart: () -> Void
 
     private let presets: [(label: String, value: Double)] = [
-        ("30s", 30), ("1m", 60), ("2m", 120), ("5m", 300)
+        ("5s", 5), ("10s", 10), ("30s", 30), ("1m", 60)
     ]
 
     var body: some View {
@@ -152,6 +152,7 @@ struct OnboardingView: View {
             // MARK: CTA
             Button {
                 UserDefaults.standard.set(interval, forKey: "refreshInterval")
+                UserDefaults.standard.set(true, forKey: "didCompleteOnboarding")
                 onStart()
                 NSApp.keyWindow?.close()
             } label: {

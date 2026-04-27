@@ -24,7 +24,7 @@ class AppState {
 
     var refreshInterval: TimeInterval {
         let saved = UserDefaults.standard.double(forKey: "refreshInterval")
-        return saved == 0 ? 30 : saved
+        return saved == 0 ? 5 : saved
     }
 
     // MARK: - Public Start

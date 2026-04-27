@@ -60,6 +60,7 @@ struct HistoryChartView: View {
     @State private var isLoading = true
     @State private var hoveredSegment: ChartSegment?
     @State private var hoverLocation: CGPoint = .zero
+    @State private var showClearConfirmation = false
 
     // MARK: - Colors
 
@@ -85,17 +86,33 @@ struct HistoryChartView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Time range picker
-            Picker("Range", selection: $selectedRange) {
-                ForEach(TimeRange.allCases) { range in
-                    Text(range.rawValue).tag(range)
+            // Time range picker + clear button
+            HStack(spacing: 8) {
+                Picker("Range", selection: $selectedRange) {
+                    ForEach(TimeRange.allCases) { range in
+                        Text(range.rawValue).tag(range)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .onChange(of: selectedRange) { _, _ in loadData() }
+
+                if !segments.isEmpty {
+                    Button {
+                        showClearConfirmation = true
+                    } label: {
+                        Image(systemName: "trash")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 26, height: 26)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Clear History")
                 }
             }
-            .pickerStyle(.segmented)
             .padding(.horizontal, 20)
             .padding(.top, 16)
             .padding(.bottom, 4)
-            .onChange(of: selectedRange) { _, _ in loadData() }
 
             // Summary stats
             statsRow
@@ -130,6 +147,12 @@ struct HistoryChartView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.windowBackgroundColor))
         .onAppear { loadData() }
+        .alert("Clear Connection History", isPresented: $showClearConfirmation) {
+            Button("Clear", role: .destructive) { clearHistory() }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("This will permanently delete all stored connection history data.")
+        }
     }
 
     // MARK: - Stats Row
@@ -302,6 +325,16 @@ struct HistoryChartView: View {
     }
 
     // MARK: - Data loading
+
+    private func clearHistory() {
+        HistoryStore.shared.clearAll {
+            DispatchQueue.main.async {
+                self.segments = []
+                self.stats = HistoryStore.Stats(totalRows: 0, connectedRows: 0, avgLatencyMs: 0, outageCount: 0)
+                self.isLoading = false
+            }
+        }
+    }
 
     private func loadData() {
         isLoading = true
